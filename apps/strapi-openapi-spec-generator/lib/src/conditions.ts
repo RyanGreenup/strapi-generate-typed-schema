@@ -30,11 +30,56 @@ interface Field {
 const isUnknownArray = (value: unknown): value is unknown[] =>
   Array.isArray(value);
 
-const relaxed = (attribute: JsonSchema, response: boolean): JsonSchema => {
-  if (!response) {
+const SCHEMAS = "#/components/schemas/";
+const BOUNDS = new Set([
+  "required",
+  "minItems",
+  "maxItems",
+  "minLength",
+  "maxLength",
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "format",
+  "pattern",
+]);
+
+/** Drop bounds and point published refs at their draft schemas. */
+const shapeOnly = (
+  value: unknown,
+  schemas: Record<string, JsonSchema>,
+): unknown => {
+  if (isUnknownArray(value)) {
+    return value.map((entry) => shapeOnly(entry, schemas));
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+  const result: JsonSchema = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "$ref" && typeof entry === "string") {
+      const draft = entry.replace(/Published(?=Document$|Block$)/u, "Draft");
+      result[key] = draft.slice(SCHEMAS.length) in schemas ? draft : entry;
+    } else if (!BOUNDS.has(key)) {
+      result[key] = shapeOnly(entry, schemas);
+    }
+  }
+  return result;
+};
+
+const relaxed = (
+  attribute: JsonSchema,
+  original: JsonSchema,
+  context: ModelContext,
+): JsonSchema => {
+  if (context.mode !== "response") {
     return {};
   }
   const { type } = attribute;
+  if (type === "enumeration") {
+    return { anyOf: [shapeOnly(original, context.schemas), { type: "null" }] };
+  }
   if (
     [
       "string",
@@ -43,7 +88,6 @@ const relaxed = (attribute: JsonSchema, response: boolean): JsonSchema => {
       "uid",
       "email",
       "password",
-      "enumeration",
       "date",
       "datetime",
       "time",
@@ -62,9 +106,14 @@ const relaxed = (attribute: JsonSchema, response: boolean): JsonSchema => {
   if (type === "boolean") {
     return { type: ["boolean", "null"] };
   }
-  // Hidden structured fields skip recursive validation too. Keeping a published
-  // component $ref here would silently reintroduce its required/minimum rules.
-  return {};
+  if (Object.keys(original).length === 0) {
+    return {};
+  }
+  // Hidden structured values keep their shape but not their published rules:
+  // the original still types the field, and its draft form accepts stale values.
+  return {
+    anyOf: [original, shapeOnly(original, context.schemas), { type: "null" }],
+  };
 };
 
 const variant = (suffix: string): Mode | undefined => {
@@ -98,7 +147,7 @@ const conditionalBranch = (
   const original = toRecord(properties[key]);
   const { required } = schema;
   const wasRequired = isUnknownArray(required) && required.includes(key);
-  properties[key] = relaxed(attribute, context.mode === "response");
+  properties[key] = relaxed(attribute, original, context);
   if (isUnknownArray(required)) {
     schema["required"] = required.filter((entry) => entry !== key);
   }

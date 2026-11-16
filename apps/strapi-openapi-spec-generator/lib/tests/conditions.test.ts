@@ -1,24 +1,11 @@
-import addFormats from "ajv-formats";
-import { Ajv2020 } from "ajv/dist/2020.js";
-import {
-  cp,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
-import { createRequire } from "node:module";
-import os from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { OpenApiDocument } from "../src/index.js";
-
-import { generateSpecification } from "../src/index.js";
 import { parseJsonObject, toRecord } from "../src/json.js";
+import { generatedFixture } from "./generated-fixture.js";
+
+vi.setConfig({ testTimeout: 5000 });
 
 /** A relation, a component, a media field and a dynamic zone. */
 const STRUCTURED = ["page", "summary", "cover", "blocks"] as const;
@@ -37,51 +24,13 @@ const hideStructured = (
 
 /* oxlint-disable unicorn/no-null -- Hidden fields can retain null values. */
 describe("generated conditional attribute validation", () => {
-  let directory: string;
-  let document: OpenApiDocument;
-  let warnings: string[];
-  const ajv = new Ajv2020({ strict: false });
   const published = {
     id: 1,
     documentId: "conditional",
     publishedAt: "2026-11-17T00:00:00.000Z",
   };
   const request = { email: "a@b.co", seo: [{ heading: "active" }] };
-  const validate = (name: string) =>
-    ajv.compile({
-      components: document.components,
-      $ref: `#/components/schemas/${name}`,
-    });
-
-  beforeAll(async () => {
-    addFormats(ajv);
-    directory = await mkdtemp(
-      path.join(os.tmpdir(), "strapi-conditions-test-"),
-    );
-    await cp(
-      fileURLToPath(new URL("fixtures/project", import.meta.url)),
-      directory,
-      { recursive: true },
-    );
-    const generated = path.join(directory, "types", "generated");
-    const modules = path.join(directory, "node_modules", "@strapi");
-    await Promise.all([
-      mkdir(generated, { recursive: true }),
-      mkdir(modules, { recursive: true }),
-    ]);
-    await Promise.all([
-      cp(
-        fileURLToPath(new URL("fixtures/generated-types", import.meta.url)),
-        generated,
-        { recursive: true },
-      ),
-      symlink(
-        path.dirname(
-          createRequire(import.meta.url).resolve("@strapi/strapi/package.json"),
-        ),
-        path.join(modules, "strapi"),
-      ),
-    ]);
+  const fixture = generatedFixture(async (directory) => {
     // Conditions are deliberately present only in source JSON, like Strapi's
     // generated declarations, which discard conditions.visible.
     const articleFile = path.join(
@@ -120,16 +69,8 @@ describe("generated conditional attribute validation", () => {
       visible: { in: [{ var: "heading" }, ["active", "on"]] },
     };
     await writeFile(componentFile, JSON.stringify(component));
-    ({ document, warnings } = await generateSpecification({
-      projectDirectory: directory,
-    }));
-  }, 600_000);
-
-  afterAll(async () => {
-    if (directory !== undefined) {
-      await rm(directory, { recursive: true, force: true });
-    }
   });
+  const { validateDocument: validate } = fixture;
 
   it("retains visible response bounds but permits retained hidden values and field selection", () => {
     const accepts = validate("ApiArticleArticlePublishedDocument");
@@ -144,13 +85,16 @@ describe("generated conditional attribute validation", () => {
     expect(accepts({ ...published, rating: 3, title: 123 })).toBe(false);
   });
 
-  it("uses create defaults for conditional required fields and only written update values", () => {
+  it("uses create defaults for conditional required fields", () => {
     const create = validate("ApiArticleArticlePublishedCreateInput");
     expect(create({ ...request })).toBe(false);
     expect(create({ ...request, title: "12345" })).toBe(true);
     expect(create({ ...request, rating: 3 })).toBe(true);
     expect(create({ ...request, rating: 3, title: null })).toBe(true);
     expect(create({ ...request, rating: 2, title: "x" })).toBe(false);
+  });
+
+  it("uses only written update values for conditional validation", () => {
     const update = validate("ApiArticleArticlePublishedUpdateInput");
     expect(update({ title: null })).toBe(true);
     expect(update({ rating: 2, title: null })).toBe(false);
@@ -229,9 +173,9 @@ describe("generated conditional attribute validation", () => {
 
   it("keeps the type of conditional structured fields for generated clients", () => {
     const properties = toRecord(
-      document.components.schemas["ApiArticleArticlePublishedDocument"]?.[
-        "properties"
-      ],
+      fixture.document?.components.schemas[
+        "ApiArticleArticlePublishedDocument"
+      ]?.["properties"],
     );
     // An empty schema becomes `unknown` in openapi-typescript output.
     const references = Object.fromEntries(
@@ -281,11 +225,13 @@ describe("generated conditional attribute validation", () => {
   });
 
   it("warns and retains unsupported source rules rather than pretending to compile them", () => {
-    expect(warnings).toContain(
+    expect(fixture.warnings).toContain(
       "api::article.article.email: unsupported conditions.visible; validation is conservatively relaxed and the rule is retained in x-strapi-conditions",
     );
     expect(
-      document.components.schemas["ApiArticleArticlePublishedDocument"],
+      fixture.document?.components.schemas[
+        "ApiArticleArticlePublishedDocument"
+      ],
     ).toHaveProperty("x-strapi-conditions.email", {
       unsupported: [{ var: "rating" }, 2],
     });

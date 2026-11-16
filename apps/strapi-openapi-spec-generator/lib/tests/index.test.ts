@@ -1,13 +1,6 @@
-import type { ValidateFunction } from "ajv";
-
-import addFormats from "ajv-formats";
-import { Ajv2020 } from "ajv/dist/2020.js";
-import { cp, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
-import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { JsonSchema, OpenApiDocument, Operation } from "../src/index.js";
 
@@ -20,6 +13,7 @@ import {
 } from "../src/index.js";
 import { toRecord } from "../src/json.js";
 import { readableSchemaName, renameSchemas } from "../src/schema-names.js";
+import { generatedFixture } from "./generated-fixture.js";
 
 vi.setConfig({ testTimeout: 5000 });
 
@@ -287,8 +281,8 @@ describe("generateSpecification", () => {
 
 /* oxlint-disable unicorn/no-null -- JSON responses distinguish null from omitted fields. */
 describe("generated response validation", () => {
-  const fixture: { directory?: string; document?: OpenApiDocument } = {};
-  const ajv = new Ajv2020({ strict: false });
+  const fixture = generatedFixture();
+  const { compileSchema, validateDocument } = fixture;
 
   const published = {
     id: 1,
@@ -296,44 +290,6 @@ describe("generated response validation", () => {
     publishedAt: "2026-11-17T00:00:00.000Z",
   };
   const draftEntry = { ...published, publishedAt: null };
-  const compileSchema = (schema: JsonSchema): ValidateFunction =>
-    ajv.compile({ components: fixture.document?.components, ...schema });
-  const validateDocument = (name: string): ValidateFunction =>
-    compileSchema({ $ref: `#/components/schemas/${name}` });
-
-  beforeAll(async () => {
-    addFormats(ajv);
-    const directory = await mkdtemp(
-      path.join(os.tmpdir(), "strapi-openapi-test-"),
-    );
-    fixture.directory = directory;
-    await cp(project, directory, { recursive: true });
-    const generated = path.join(directory, "types", "generated");
-    const modules = path.join(directory, "node_modules", "@strapi");
-    const declarations = fileURLToPath(
-      new URL("fixtures/generated-types", import.meta.url),
-    );
-    const strapiManifest = createRequire(import.meta.url).resolve(
-      "@strapi/strapi/package.json",
-    );
-    await Promise.all([
-      mkdir(generated, { recursive: true }),
-      mkdir(modules, { recursive: true }),
-    ]);
-    await Promise.all([
-      cp(declarations, generated, { recursive: true }),
-      symlink(path.dirname(strapiManifest), path.join(modules, "strapi")),
-    ]);
-    ({ document: fixture.document } = await generateSpecification({
-      projectDirectory: directory,
-    }));
-  }, 600_000);
-
-  afterAll(async () => {
-    if (fixture.directory !== undefined) {
-      await rm(fixture.directory, { force: true, recursive: true });
-    }
-  });
 
   it("accepts incomplete draft writes through generated operation bodies", () => {
     for (const [route, method] of [
@@ -381,12 +337,12 @@ describe("generated response validation", () => {
     ]) {
       expect(validate({ data: { ...data, ...invalid } })).toBe(false);
     }
-    for (const data of [
+    for (const missingData of [
       {},
       { title: "12345" },
       { email: "a@b.co", seo: [{ heading: "SEO" }] },
     ]) {
-      expect(validate({ data })).toBe(false);
+      expect(validate({ data: missingData })).toBe(false);
     }
   });
 
@@ -457,17 +413,21 @@ describe("generated response validation", () => {
     ]) {
       expect(validate({ data })).toBe(false);
     }
-    const draft = validateDocument("ApiArticleArticleDraftUpdateRequest");
-    expect(draft({ data: {} })).toBe(true);
-    expect(draft({ data: { seo: [{}], summary: {}, title: null } })).toBe(true);
+    const validateDraftUpdate = validateDocument(
+      "ApiArticleArticleDraftUpdateRequest",
+    );
+    expect(validateDraftUpdate({ data: {} })).toBe(true);
+    expect(
+      validateDraftUpdate({ data: { seo: [{}], summary: {}, title: null } }),
+    ).toBe(true);
   });
 
   it("keeps non-draft writes strict and enforces the default short-text maximum", () => {
-    const validate = validateDocument("ApiPagePageCreateRequest");
-    expect(validate({ data: { title: "12345" } })).toBe(true);
-    expect(validate({ data: {} })).toBe(false);
-    expect(validate({ data: { title: null } })).toBe(false);
-    expect(validate({ data: { title: "1234" } })).toBe(false);
+    const validatePage = validateDocument("ApiPagePageCreateRequest");
+    expect(validatePage({ data: { title: "12345" } })).toBe(true);
+    expect(validatePage({ data: {} })).toBe(false);
+    expect(validatePage({ data: { title: null } })).toBe(false);
+    expect(validatePage({ data: { title: "1234" } })).toBe(false);
     for (const name of ["Draft", "Published"]) {
       const validate = validateDocument(
         `ApiArticleArticle${name}UpdateRequest`,
