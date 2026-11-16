@@ -45,6 +45,10 @@ const entrySource = (contentTypes: ContentType[]): string => {
       `type ${name}Document = RestAnyDocument<${uid}>;`,
       `type ${names.one} = RestAnyFindOne<${uid}>;`,
       `type ${names.update} = RestUpdateBody<${uid}>;`,
+      `type ${name}PublishedUpdateRequest = RestPublishedUpdateBody<${uid}>;`,
+      ...(contentType.draftAndPublish
+        ? [`type ${name}DraftUpdateRequest = RestDraftUpdateBody<${uid}>;`]
+        : []),
     ];
 
     // A single type has no list route and no create route.
@@ -54,22 +58,25 @@ const entrySource = (contentTypes: ContentType[]): string => {
           ...shared,
           `type ${names.list} = RestAnyFind<${uid}>;`,
           `type ${names.create} = RestCreateBody<${uid}>;`,
+          `type ${name}PublishedCreateRequest = RestPublishedCreateBody<${uid}>;`,
+          ...(contentType.draftAndPublish
+            ? [`type ${name}DraftCreateRequest = RestDraftCreateBody<${uid}>;`]
+            : []),
         ];
   });
   const aliasNames = aliases.map((alias) => alias.split(" ")[1] ?? "");
 
   return [
     'import typia from "typia";',
-    'import type { RestAnyDocument, RestAnyFind, RestAnyFindOne, RestCreateBody, RestError, RestUpdateBody } from "./rest-types.ts";',
+    'import type { RestAnyDocument, RestAnyFind, RestAnyFindOne, RestCreateBody, RestDraftCreateBody, RestDraftUpdateBody, RestPublishedCreateBody, RestPublishedUpdateBody, RestError, RestUpdateBody } from "./rest-types.ts";',
     "// Declared here so that the file needs no Node.js type package.",
     "declare const process: { stdout: { write(text: string): void } };",
     ...aliases,
     `const generated = typia.json.schemas<[${[...aliasNames, ERROR_SCHEMA].join(", ")}], "3.1">();`,
     "const schemas = generated.components.schemas ?? {};",
     `const names = ${JSON.stringify([...aliasNames, ERROR_SCHEMA])};`,
-    "// Only generic document unions need aliases; state objects already have generic names.",
+    "// Keep public aliases when typia emits a union inline; referenced state objects are renamed.",
     "for (const [index, name] of names.entries()) {",
-    '  if (!name.endsWith("Document")) continue;',
     "  const schema = generated.schemas[index]!;",
     '  if (!("$ref" in schema)) schemas[name] ??= schema;',
     "}",

@@ -3,8 +3,18 @@
   "info": { "singularName": "article", "pluralName": "articles" },
   "options": { "draftAndPublish": true },
   "attributes": {
-    "title": { "type": "string", "required": true, "minLength": 5, "maxLength": 10 },
-    "email": { "type": "email", "required": true, "minLength": 6, "maxLength": 40 },
+    "title": {
+      "type": "string",
+      "required": true,
+      "minLength": 5,
+      "maxLength": 10
+    },
+    "email": {
+      "type": "email",
+      "required": true,
+      "minLength": 6,
+      "maxLength": 40
+    },
     "rating": { "type": "integer", "min": 2, "max": 8 },
     "price": { "type": "decimal", "min": 0.5, "max": 10.5 },
     "seo": {
@@ -20,6 +30,32 @@
       "relation": "manyToOne",
       "target": "api::page.page",
       "required": true
-    }
+    },
+    "label": { "type": "string", "required": true, "default": "default" },
+    "slug": { "type": "uid", "minLength": 3, "maxLength": 12 },
+    "shortText": { "type": "string" },
+    "summary": {
+      "type": "component",
+      "component": "shared.seo",
+      "repeatable": false
+    },
+    "link": {
+      "type": "component",
+      "component": "shared.conditional-link",
+      "repeatable": false
+    },
+    "blocks": {
+      "type": "dynamiczone",
+      "components": ["shared.seo", "shared.conditional-link"],
+      "min": 1,
+      "max": 2
+    },
+    "cover": {
+      "type": "media",
+      "multiple": false,
+      "allowedTypes": ["images"],
+      "required": true
+    },
+    "internalCode": { "type": "string", "required": true, "writable": false }
   }
 }

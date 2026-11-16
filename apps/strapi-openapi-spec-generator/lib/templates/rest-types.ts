@@ -23,8 +23,6 @@
  *
  * Rules that a type cannot express, so the schemas do not have them:
  * - `unique`, schema regexes, custom validators, and the min and max of a biginteger.
- * - A create body lists every required attribute as required. Strapi only enforces most
- *   of them when the entry is published: a `?status=draft` create accepts less.
  * - Strapi also accepts `locale` in a body. It is left out here: send it as a query parameter.
  * - Keys hidden by `api.responses.privateAttributes`, custom fields (typed `unknown`),
  *   and custom controllers or middleware that rewrite a body.
@@ -198,12 +196,17 @@ type PopulatedValue<A, Published extends boolean> = A extends {
                   components: infer Cs extends readonly UID.Component[];
                 }
               ? Published extends true
-                ? PublishedArray<{
-                    [C in Cs[number]]: RestPublishedZoneEntry<C>;
-                  }[Cs[number]], A>
-                : Array<{
-                    [C in Cs[number]]: RestDraftZoneEntry<C>;
-                  }[Cs[number]]>
+                ? PublishedArray<
+                    {
+                      [C in Cs[number]]: RestPublishedZoneEntry<C>;
+                    }[Cs[number]],
+                    A
+                  >
+                : Array<
+                    {
+                      [C in Cs[number]]: RestDraftZoneEntry<C>;
+                    }[Cs[number]]
+                  >
               : never;
 
 /**
@@ -283,17 +286,7 @@ export type RestError = {
 
 // ------------------------------------------------------------------ request bodies
 
-/** The length and range options of an attribute as typia tags. `unknown` adds no constraint. */
-type Length<A> = (A extends { minLength: infer N extends number }
-  ? tags.MinLength<N>
-  : unknown) &
-  (A extends { maxLength: infer N extends number }
-    ? tags.MaxLength<N>
-    : unknown);
-type Range<A> = (A extends { min: infer N extends number }
-  ? tags.Minimum<N>
-  : unknown) &
-  (A extends { max: infer N extends number } ? tags.Maximum<N> : unknown);
+/** `unknown` adds no constraint. Scalar bounds are shared with response validation. */
 type ItemCount<A> = (A extends { min: infer N extends number }
   ? tags.MinItems<N>
   : unknown) &
@@ -321,31 +314,57 @@ type RelationInput<Many extends boolean> = Many extends true
   ? RelationRef[] | RelationOperations
   : RelationRef | RelationOperations;
 
-type InputValue<A> = A extends { type: "string" | "text" | "richtext" }
-  ? string & Length<A>
-  : A extends { type: "password" }
-    ? string // Strapi does not enforce minLength or maxLength on a password
-    : A extends { type: "uid" }
-      ? string & tags.Pattern<"^[A-Za-z0-9-_.~]*$"> & Length<A>
-      : A extends { type: "email" }
-        ? string & tags.Format<"email"> & Length<A>
-        : A extends { type: "integer" }
-          ? Integer & Range<A>
-          : A extends { type: "float" | "decimal" }
-            ? number & Range<A>
-            : A extends { type: "biginteger" }
-              ? IntegerString | Integer
-              : A extends { type: "timestamp" }
-                ? DateTimeString | Integer
-                : A extends { type: PopulatableType }
-                  ? StructuredInput<A>
-                  : SharedValue<A>;
+type InputValue<
+  A,
+  Published extends boolean,
+  Updating extends boolean,
+> = A extends { type: "password" }
+  ? string // Strapi's password validator ignores length options.
+  : A extends { type: "uid" }
+    ? string &
+        ResponseLength<A, Published> &
+        (Published extends true ? tags.Pattern<"^[A-Za-z0-9-_.~]*$"> : unknown)
+    : A extends { type: "biginteger" }
+      ? IntegerString | Integer
+      : A extends { type: "timestamp" }
+        ? DateTimeString | Integer
+        : A extends { type: PopulatableType }
+          ? StructuredInput<A, Published, Updating>
+          : ScalarValue<A, Published>;
 
-type StructuredInput<A> = A extends {
-  type: "relation";
-  relation: infer R;
-  target: UID.ContentType;
-}
+type EntryInput<
+  C extends UID.Component,
+  Published extends boolean,
+  Updating extends boolean,
+> = Updating extends true
+  ? Published extends true
+    ? PublishedComponentInput<C>
+    : DraftComponentInput<C>
+  : Published extends true
+    ? PublishedCreateComponentInput<C>
+    : DraftCreateComponentInput<C>;
+
+type ZoneInput<
+  C extends UID.Component,
+  Published extends boolean,
+  Updating extends boolean,
+> = Updating extends true
+  ? Published extends true
+    ? PublishedUpdateZoneInput<C>
+    : DraftUpdateZoneInput<C>
+  : Published extends true
+    ? PublishedCreateZoneInput<C>
+    : DraftCreateZoneInput<C>;
+
+type InputArray<E, A, Published extends boolean> = Published extends true
+  ? PublishedArray<E, A>
+  : E[];
+
+type StructuredInput<
+  A,
+  Published extends boolean,
+  Updating extends boolean,
+> = A extends { type: "relation"; relation: infer R; target: UID.ContentType }
   ? RelationInput<R extends ToMany ? true : false>
   : A extends { type: "relation" }
     ? JsonValue // morphTo: no static target
@@ -358,57 +377,156 @@ type StructuredInput<A> = A extends {
               component: infer C extends UID.Component;
               repeatable?: true;
             }
-          ? ComponentInput<C>[] & ItemCount<A>
+          ? InputArray<EntryInput<C, Published, Updating>, A, Published>
           : A extends {
                 type: "component";
                 component: infer C extends UID.Component;
               }
-            ? ComponentInput<C>
+            ? EntryInput<C, Published, Updating>
             : A extends {
                   type: "dynamiczone";
                   components: infer Cs extends readonly UID.Component[];
                 }
-              ? Array<{ [C in Cs[number]]: ZoneEntryInput<C> }[Cs[number]]> &
-                  ItemCount<A>
+              ? InputArray<
+                  {
+                    [C in Cs[number]]: ZoneInput<C, Published, Updating>;
+                  }[Cs[number]],
+                  A,
+                  Published
+                >
               : unknown;
 
 /** Set by Strapi, or (locale) sent as a query parameter instead. */
 type NotWritable =
+  | "id"
+  | "documentId"
   | "createdAt"
   | "updatedAt"
   | "createdBy"
   | "updatedBy"
+  | "publishedAt"
   | "locale"
   | "localizations";
 
-type WritableKey<U extends UID.Schema> = Exclude<AttrKey<U>, NotWritable>;
+type WritableKey<U extends UID.Schema> = {
+  [K in Exclude<AttrKey<U>, NotWritable>]: Attrs<U>[K] extends {
+    writable: false;
+  }
+    ? never
+    : K;
+}[Exclude<AttrKey<U>, NotWritable>];
 
-type RequiredKey<U extends UID.Schema> = {
-  [K in WritableKey<U>]: Attrs<U>[K] extends { required: true } ? K : never;
+type ArrayAttribute =
+  | { type: "dynamiczone" }
+  | { type: "component"; repeatable?: true };
+
+/** Default `strictRelations: false` does not enforce relation/media required markers.
+ * Projects enabling that runtime flag need additional validation; generated types do not expose it. */
+type RequiredInput<A, Published extends boolean> = A extends {
+  type: "relation" | "media";
+}
+  ? false
+  : A extends ArrayAttribute
+    ? true
+    : Published extends true
+      ? A extends { required: true }
+        ? true
+        : false
+      : false;
+
+type InputField<A, Published extends boolean, Updating extends boolean> =
+  | InputValue<A, Published, Updating>
+  | (RequiredInput<A, Published> extends true ? never : null);
+
+type CreateRequiredKey<U extends UID.Schema, Published extends boolean> = {
+  [K in WritableKey<U>]: Attrs<U>[K] extends { default: unknown }
+    ? never
+    : Attrs<U>[K] extends { required: true }
+      ? RequiredInput<Attrs<U>[K], Published> extends true
+        ? K
+        : never
+      : never;
 }[WritableKey<U>];
 
-type OptionalInputs<U extends UID.Schema> = {
-  [K in Exclude<WritableKey<U>, RequiredKey<U>>]?: InputValue<
-    Attrs<U>[K]
-  > | null;
+export type RestPublishedCreateInput<U extends UID.Schema> = {
+  [K in CreateRequiredKey<U, true>]: InputField<Attrs<U>[K], true, false>;
+} & {
+  [K in Exclude<WritableKey<U>, CreateRequiredKey<U, true>>]?: InputField<
+    Attrs<U>[K],
+    true,
+    false
+  >;
+};
+export type RestDraftCreateInput<U extends UID.Schema> = {
+  [K in CreateRequiredKey<U, false>]: InputField<Attrs<U>[K], false, false>;
+} & {
+  [K in Exclude<WritableKey<U>, CreateRequiredKey<U, false>>]?: InputField<
+    Attrs<U>[K],
+    false,
+    false
+  >;
 };
 
-/** The `data` of a create body: required attributes must be sent. */
-export type RestCreateInput<U extends UID.Schema> = {
-  [K in RequiredKey<U>]: InputValue<Attrs<U>[K]>;
-} & OptionalInputs<U>;
+/** Omitted update fields keep their existing values; new nested components still use create rules. */
+export type RestPublishedUpdateInput<U extends UID.Schema> = {
+  [K in WritableKey<U>]?: InputField<Attrs<U>[K], true, true>;
+};
+export type RestDraftUpdateInput<U extends UID.Schema> = {
+  [K in WritableKey<U>]?: InputField<Attrs<U>[K], false, true>;
+};
 
-/** The `data` of an update body: every attribute may be left out. */
-export type RestUpdateInput<U extends UID.Schema> = {
-  [K in RequiredKey<U>]?: InputValue<Attrs<U>[K]>;
-} & OptionalInputs<U>;
+type HasDrafts<U extends UID.Schema> =
+  Schema.Schema<U> extends {
+    options: { draftAndPublish: true };
+  }
+    ? true
+    : false;
 
-/** A component entry is always sent whole. `id` keeps an existing entry instead of replacing it. */
-export type ComponentInput<C extends UID.Component> = {
+/** D&P operation bodies accept drafts; status-specific aliases express publication constraints. */
+export type RestCreateInput<U extends UID.Schema> =
+  HasDrafts<U> extends true
+    ? RestDraftCreateInput<U>
+    : RestPublishedCreateInput<U>;
+export type RestUpdateInput<U extends UID.Schema> =
+  HasDrafts<U> extends true
+    ? RestDraftUpdateInput<U>
+    : RestPublishedUpdateInput<U>;
+
+/** An id identifies an existing component, whose omitted values are retained. */
+export type PublishedComponentInput<C extends UID.Component> =
+  | ({ id: RowId } & RestPublishedUpdateInput<C>)
+  | ({ id?: never } & RestPublishedCreateInput<C>);
+export type DraftComponentInput<C extends UID.Component> =
+  | ({ id: RowId } & RestDraftUpdateInput<C>)
+  | ({ id?: never } & RestDraftCreateInput<C>);
+
+/** Named shapes keep component and zone metadata addressable after typia expansion. */
+export type PublishedCreateComponentInput<C extends UID.Component> = {
   id?: RowId;
-} & RestCreateInput<C>;
-export type ZoneEntryInput<C extends UID.Component> = ComponentInput<C> & {
-  __component: C;
+} & RestPublishedCreateInput<C>;
+export type DraftCreateComponentInput<C extends UID.Component> = {
+  id?: RowId;
+} & RestDraftCreateInput<C>;
+export type PublishedCreateZoneInput<C extends UID.Component> =
+  PublishedCreateComponentInput<C> & { __component: C };
+export type DraftCreateZoneInput<C extends UID.Component> =
+  DraftCreateComponentInput<C> & { __component: C };
+export type PublishedUpdateZoneInput<C extends UID.Component> =
+  PublishedComponentInput<C> & { __component: C };
+export type DraftUpdateZoneInput<C extends UID.Component> =
+  DraftComponentInput<C> & { __component: C };
+
+export type RestPublishedCreateBody<U extends UID.ContentType> = {
+  data: RestPublishedCreateInput<U>;
+};
+export type RestDraftCreateBody<U extends UID.ContentType> = {
+  data: RestDraftCreateInput<U>;
+};
+export type RestPublishedUpdateBody<U extends UID.ContentType> = {
+  data: RestPublishedUpdateInput<U>;
+};
+export type RestDraftUpdateBody<U extends UID.ContentType> = {
+  data: RestDraftUpdateInput<U>;
 };
 
 export type RestCreateBody<U extends UID.ContentType> = {

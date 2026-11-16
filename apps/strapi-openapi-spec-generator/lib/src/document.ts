@@ -278,6 +278,21 @@ const coreOperation = (
         content: jsonContent(names[spec.request]),
         required: true,
       },
+      ...(contentType.draftAndPublish && {
+        // OpenAPI cannot make a body schema depend on a query parameter.
+        "x-strapi-request-status": {
+          parameter: "status",
+          default: "published",
+          schemas: {
+            draft: {
+              $ref: `#/components/schemas/${names[spec.request].replace(/(Create|Update)Request$/u, "Draft$1Request")}`,
+            },
+            published: {
+              $ref: `#/components/schemas/${names[spec.request].replace(/(Create|Update)Request$/u, "Published$1Request")}`,
+            },
+          },
+        },
+      }),
     }),
     responses: {
       [String(spec.status)]: success,

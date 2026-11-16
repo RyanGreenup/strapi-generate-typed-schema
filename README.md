@@ -52,38 +52,39 @@ How it works:
 
 Generated response schemas preserve the restrictions in the project's generated
 Strapi types: string `minLength`/`maxLength`, email format, numeric `min`/`max`,
-and component item counts. For example, a published string with
-`minLength: 5` and `maxLength: 10` produces those OpenAPI keywords; a generated
-validator can reject a four-character value without a separate handwritten rule.
-String attributes without an explicit maximum use Strapi's default
-`maxLength: 255`.
+and component item counts. For example, a published string with `minLength: 5`
+and `maxLength: 10` produces those OpenAPI keywords; a generated validator can
+reject a four-character value without a separate handwritten rule. String
+attributes without an explicit maximum use Strapi's default `maxLength: 255`.
 
 Draft-and-publish content types expose separate status shapes, such as
-`ApiArticleArticlePublishedDocument` and `ApiArticleArticleDraftDocument`.
-The ordinary `ApiArticleArticleDocument` and operation response schemas accept
+`ApiArticleArticlePublishedDocument` and `ApiArticleArticleDraftDocument`. The
+ordinary `ApiArticleArticleDocument` and operation response schemas accept
 either state:
 
-| Restriction | Published response | Draft response |
-| --- | --- | --- |
-| String minimum length and email format | Enforced | Relaxed |
-| String maximum length | Enforced | Enforced |
-| Numeric minimum | Enforced | Relaxed |
-| Numeric maximum and integer type | Enforced | Enforced |
-| Component minimum/maximum item count | Enforced | Relaxed |
-| Required scalar or component value, when returned | Non-null | Nullable |
+| Restriction                                       | Published response | Draft response |
+| ------------------------------------------------- | ------------------ | -------------- |
+| String minimum length and email format            | Enforced           | Relaxed        |
+| String maximum length                             | Enforced           | Enforced       |
+| Numeric minimum                                   | Enforced           | Relaxed        |
+| Numeric maximum and integer type                  | Enforced           | Enforced       |
+| Component minimum/maximum item count              | Enforced           | Relaxed        |
+| Required scalar or component value, when returned | Non-null           | Nullable       |
 
 Every attribute key remains optional because `fields` and `populate` can omit
 it; `required` does not mean that a response always includes that key. IDs stay
-required. Relations and media can still be null, and related documents use
-their own status rather than inheriting the parent's status. Nested components
-inherit their parent's status restrictions.
-Optional component arrays may be empty even when they declare a minimum count;
-the minimum applies to nonempty arrays, or to required arrays.
+required. Relations and media can still be null, and related documents use their
+own status rather than inheriting the parent's status. Nested components inherit
+their parent's status restrictions. Optional component arrays may be empty even
+when they declare a minimum count; the minimum applies to nonempty arrays, or to
+required arrays.
 
 When returned, `publishedAt` distinguishes the published date-time from draft
 null. When `fields` omits it, the generic response must accept either shape;
 consumers that know the requested status can use the status-specific schema.
 Content types without draft-and-publish use the published restrictions directly.
+Nullable relations retain `null` as a separate alternative while grouping their
+overlapping draft/published variants under the document's `anyOf` schema.
 
 ### Limits
 

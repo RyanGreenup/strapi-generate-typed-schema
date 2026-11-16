@@ -24,6 +24,21 @@ export interface ApiArticleArticle extends Struct.CollectionTypeSchema {
       Schema.Attribute.SetMinMax<{ min: 1; max: 2 }>;
     page: Schema.Attribute.Relation<"manyToOne", "api::page.page"> &
       Schema.Attribute.Required;
+    label: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.DefaultTo<"default">;
+    slug: Schema.Attribute.UID &
+      Schema.Attribute.SetMinMaxLength<{ minLength: 3; maxLength: 12 }>;
+    shortText: Schema.Attribute.String;
+    summary: Schema.Attribute.Component<"shared.seo", false>;
+    link: Schema.Attribute.Component<"shared.conditional-link", false>;
+    blocks: Schema.Attribute.DynamicZone<
+      ["shared.seo", "shared.conditional-link"]
+    > &
+      Schema.Attribute.SetMinMax<{ min: 1; max: 2 }>;
+    cover: Schema.Attribute.Media<"images", false> & Schema.Attribute.Required;
+    internalCode: Schema.Attribute.String &
+      Schema.Attribute.Required & { writable: false };
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -94,6 +109,22 @@ export interface SharedSeo extends Struct.ComponentSchema {
   };
 }
 
+export interface SharedConditionalLink extends Struct.ComponentSchema {
+  collectionName: "components_shared_conditional_links";
+  info: { displayName: "Conditional link" };
+  attributes: {
+    kind: Schema.Attribute.Enumeration<["internal", "external"]> &
+      Schema.Attribute.Required &
+      Schema.Attribute.DefaultTo<"internal">;
+    label: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.SetMinMaxLength<{ minLength: 1 }>;
+    url: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.SetMinMaxLength<{ minLength: 1 }>;
+  };
+}
+
 declare module "@strapi/strapi" {
   export module Public {
     export interface ContentTypeSchemas {
@@ -104,6 +135,7 @@ declare module "@strapi/strapi" {
     }
     export interface ComponentSchemas {
       "shared.seo": SharedSeo;
+      "shared.conditional-link": SharedConditionalLink;
     }
   }
 }

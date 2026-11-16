@@ -4,6 +4,11 @@
   "options": { "draftAndPublish": false },
   "pluginOptions": { "i18n": { "localized": true } },
   "attributes": {
-    "title": { "type": "string", "required": true, "minLength": 5, "maxLength": 10 }
+    "title": {
+      "type": "string",
+      "required": true,
+      "minLength": 5,
+      "maxLength": 10
+    }
   }
 }

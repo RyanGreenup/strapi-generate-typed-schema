@@ -91,11 +91,14 @@ const generateSpecification = async (
     );
   }
   const { routes, warnings } = await readRoutes(projectDirectory, contentTypes);
-  const schemas = await generateSchemas({
-    cacheDirectory: options.cacheDirectory ?? defaultCacheDirectory(),
-    contentTypes,
-    projectDirectory,
-  });
+  const schemas = await generateSchemas(
+    {
+      cacheDirectory: options.cacheDirectory ?? defaultCacheDirectory(),
+      contentTypes,
+      projectDirectory,
+    },
+    warnings,
+  );
 
   return {
     document: buildDocument({

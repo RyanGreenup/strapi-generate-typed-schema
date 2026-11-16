@@ -18,12 +18,12 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "test": "vitest run tests/index.test.ts",
+    "test": "vitest run tests",
     "check-types": "tsgo --skipLibCheck --noEmit",
     "format": "oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --write .",
     "lint": "oxlint --type-aware --type-check . && oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --check .",
     "fix": "oxlint --fix --fix-suggestions --type-aware --type-check .",
-    "test:coverage": "vitest run tests/index.test.ts --coverage",
+    "test:coverage": "vitest run tests --coverage",
     "release": "bumpp",
     "prepublishOnly": "pnpm run build"
   },

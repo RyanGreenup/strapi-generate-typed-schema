@@ -7,6 +7,7 @@ import { text } from "node:stream/consumers";
 import type { JsonSchema } from "./document.js";
 import type { SchemasInput } from "./work-directory.js";
 
+import { applyConditions } from "./conditions.js";
 import { parseJsonObject, toRecord } from "./json.js";
 import { renameSchemas } from "./schema-names.js";
 import { createWorkDirectory, packageDirectory } from "./work-directory.js";
@@ -70,10 +71,19 @@ const runEntry = async (
  */
 const generateSchemas = async (
   input: SchemasInput,
+  warnings: string[] = [],
 ): Promise<Record<string, JsonSchema>> => {
   const work = await createWorkDirectory(input);
   try {
-    return renameSchemas(await runEntry(work, input.cacheDirectory));
+    const schemas = renameSchemas(await runEntry(work, input.cacheDirectory));
+    warnings.push(
+      ...(await applyConditions(
+        input.projectDirectory,
+        input.contentTypes,
+        schemas,
+      )),
+    );
+    return schemas;
   } finally {
     await rm(work, { force: true, recursive: true });
   }

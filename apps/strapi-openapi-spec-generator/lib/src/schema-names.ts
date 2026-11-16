@@ -8,7 +8,22 @@ import { pascalCase } from "./names.js";
  * schema name. `RestAnyDocument<"api::page.page">` becomes "ApiPagePageDocument".
  */
 const SUFFIXES: Record<string, string> = {
-  ComponentInput: "EntryInput",
+  DraftCreateComponentInput: "DraftCreateEntryInput",
+  PublishedCreateComponentInput: "PublishedCreateEntryInput",
+  DraftCreateZoneInput: "DraftCreateBlockInput",
+  PublishedCreateZoneInput: "PublishedCreateBlockInput",
+  DraftUpdateZoneInput: "DraftUpdateBlockInput",
+  PublishedUpdateZoneInput: "PublishedUpdateBlockInput",
+  DraftComponentInput: "DraftEntryInput",
+  PublishedComponentInput: "PublishedEntryInput",
+  RestDraftCreateInput: "DraftCreateInput",
+  RestPublishedCreateInput: "PublishedCreateInput",
+  RestDraftUpdateInput: "DraftUpdateInput",
+  RestPublishedUpdateInput: "PublishedUpdateInput",
+  RestDraftCreateBody: "DraftCreateRequest",
+  RestPublishedCreateBody: "PublishedCreateRequest",
+  RestDraftUpdateBody: "DraftUpdateRequest",
+  RestPublishedUpdateBody: "PublishedUpdateRequest",
   RestAnyDocument: "Document",
   RestDraftDocument: "DraftDocument",
   RestDraftZoneEntry: "DraftBlock",
@@ -16,7 +31,6 @@ const SUFFIXES: Record<string, string> = {
   RestPublishedZoneEntry: "PublishedBlock",
   RestCreateInput: "CreateInput",
   RestUpdateInput: "UpdateInput",
-  ZoneEntryInput: "BlockInput",
 };
 
 /** typia ends the name of a generic type with a hash of its arguments. */
@@ -51,6 +65,29 @@ const readableSchemaName = (name: string): string => {
   return `${pascalCase(uid)}${SUFFIXES[alias] ?? ""}`;
 };
 
+const documentUnion = (
+  schema: JsonSchema,
+  document: string,
+  root: string,
+): JsonSchema => {
+  const variants = schema["oneOf"] ?? schema["anyOf"];
+  const alternatives: unknown[] = Array.isArray(variants) ? variants : [];
+  if (alternatives.length > 2) {
+    return {
+      ...schema,
+      [schema["oneOf"] === undefined ? "anyOf" : "oneOf"]: [
+        ...alternatives.filter(
+          (entry) => toRecord(entry)["$ref"] === undefined,
+        ),
+        { $ref: `#/components/schemas/${document}` },
+      ],
+    };
+  }
+  return root === document
+    ? { anyOf: variants }
+    : { $ref: `#/components/schemas/${document}` };
+};
+
 /**
  * Preserve named document unions and make only publication-state unions non-exclusive.
  * `fields` can omit publishedAt, so a valid entry can match both state schemas.
@@ -60,21 +97,32 @@ const responseUnions = (
 ): Record<string, JsonSchema> => {
   const documents = new Map<string, string>();
   for (const name of Object.keys(schemas)) {
-    if (!name.endsWith("PublishedDocument")) {
-      continue;
-    }
-    const prefix = name.slice(0, -"PublishedDocument".length);
-    const document = `${prefix}Document`;
-    const published = `#/components/schemas/${name}`;
-    const draft = `#/components/schemas/${prefix}DraftDocument`;
-    if (`${prefix}DraftDocument` in schemas) {
-      const variants = [{ $ref: published }, { $ref: draft }];
-      documents.set([published, draft].sort().join("\n"), document);
-      schemas[document] = { anyOf: variants };
-    } else {
-      schemas[document] ??= { $ref: published };
+    if (name.endsWith("PublishedDocument")) {
+      const prefix = name.slice(0, -"PublishedDocument".length);
+      const document = `${prefix}Document`;
+      const published = `#/components/schemas/${name}`;
+      const draft = `#/components/schemas/${prefix}DraftDocument`;
+      if (`${prefix}DraftDocument` in schemas) {
+        const variants = [{ $ref: published }, { $ref: draft }];
+        documents.set([published, draft].toSorted().join("\n"), document);
+        schemas[document] = { anyOf: variants };
+      } else {
+        schemas[document] ??= { $ref: published };
+      }
     }
   }
+
+  const unionDocument = (variants: unknown): string | undefined => {
+    if (!Array.isArray(variants)) {
+      return undefined;
+    }
+    const references = variants
+      .map((entry: unknown) => toRecord(entry)["$ref"])
+      .filter(
+        (reference): reference is string => typeof reference === "string",
+      );
+    return documents.get(references.toSorted().join("\n"));
+  };
 
   const visit = (value: unknown, root: string): unknown => {
     if (Array.isArray(value)) {
@@ -85,16 +133,9 @@ const responseUnions = (
     }
     const schema = toRecord(value);
     const variants = schema["oneOf"] ?? schema["anyOf"];
-    if (Array.isArray(variants) && variants.length === 2) {
-      const references = variants.map((entry: unknown) => toRecord(entry)["$ref"]);
-      if (references.every((reference): reference is string => typeof reference === "string")) {
-        const document = documents.get(references.sort().join("\n"));
-        if (document !== undefined) {
-          return root === document
-            ? { anyOf: variants }
-            : { $ref: `#/components/schemas/${document}` };
-        }
-      }
+    const document = unionDocument(variants);
+    if (document !== undefined) {
+      return documentUnion(schema, document, root);
     }
     return Object.fromEntries(
       Object.entries(schema).map(([key, entry]) => [key, visit(entry, "")]),

@@ -1,0 +1,19 @@
+{
+  "collectionName": "components_shared_conditional_links",
+  "info": { "displayName": "Conditional link" },
+  "attributes": {
+    "kind": {
+      "type": "enumeration",
+      "enum": ["internal", "external"],
+      "required": true,
+      "default": "internal"
+    },
+    "label": { "type": "string", "required": true, "minLength": 1 },
+    "url": {
+      "type": "string",
+      "required": true,
+      "minLength": 1,
+      "conditions": { "visible": { "==": [{ "var": "kind" }, "external"] } }
+    }
+  }
+}
