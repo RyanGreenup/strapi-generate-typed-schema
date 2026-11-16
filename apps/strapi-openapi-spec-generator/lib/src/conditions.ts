@@ -224,10 +224,13 @@ const variant = (
     };
   }
   if (
-    /^(?:Published|Draft)?(?:Create|Update)?(?:Entry|Block)Input$/u.test(suffix)
+    /^(?:Published|Draft)?(?:Create|Update|Existing|New)?(?:Entry|Block)Input$/u.test(suffix)
   ) {
     return {
-      mode: suffix.includes("Update") ? "update" : "create",
+      mode:
+        suffix.includes("Update") || suffix.includes("Existing") || suffix === "DraftEntryInput"
+          ? "update"
+          : "create",
       published: !suffix.startsWith("Draft"),
     };
   }
@@ -240,20 +243,32 @@ const applyModel = (
   state: Variant,
   uid: string,
   warnings: Set<string>,
+  schemas: Record<string, JsonSchema>,
+  visited: WeakSet<JsonSchema>,
 ): void => {
+  if (visited.has(schema)) {
+    return;
+  }
+  visited.add(schema);
+  const reference = schema["$ref"];
+  const prefix = "#/components/schemas/";
+  if (typeof reference === "string" && reference.startsWith(prefix)) {
+    const target = schemas[reference.slice(prefix.length)];
+    if (target !== undefined) {
+      applyModel(target, attributes, state, uid, warnings, schemas, visited);
+    }
+    return;
+  }
+  const required = schema["required"];
+  if (state.mode !== "response" && Array.isArray(required) && required.includes("id")) {
+    state = { ...state, mode: "update" };
+  }
   for (const keyword of ["allOf", "anyOf", "oneOf"]) {
     const entries = schema[keyword];
     if (Array.isArray(entries)) {
       for (const entry of entries) {
         const child = toRecord(entry);
-        const required = child["required"];
-        const mode =
-          state.mode !== "response" &&
-          Array.isArray(required) &&
-          required.includes("id")
-            ? "update"
-            : state.mode;
-        applyModel(child, attributes, { ...state, mode }, uid, warnings);
+        applyModel(child, attributes, state, uid, warnings, schemas, visited);
       }
     }
   }
@@ -335,6 +350,7 @@ const applyConditions = async (
       parseJsonObject(await readFile(model.file, "utf8"))["attributes"],
     );
     const prefix = pascalCase(model.uid);
+    const visited = new WeakSet<JsonSchema>();
     for (const [name, schema] of Object.entries(schemas)) {
       let state = name.startsWith(prefix)
         ? variant(name.slice(prefix.length), model.published)
@@ -359,7 +375,7 @@ const applyConditions = async (
         }
       }
       if (state !== undefined) {
-        applyModel(schema, attributes, state, model.uid, warnings);
+        applyModel(schema, attributes, state, model.uid, warnings, schemas, visited);
       }
     }
   }

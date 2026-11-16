@@ -8,6 +8,10 @@ import { pascalCase } from "./names.js";
  * schema name. `RestAnyDocument<"api::page.page">` becomes "ApiPagePageDocument".
  */
 const SUFFIXES: Record<string, string> = {
+  PublishedExistingComponentInput: "PublishedExistingEntryInput",
+  PublishedNewComponentInput: "PublishedNewEntryInput",
+  PublishedExistingZoneInput: "PublishedExistingBlockInput",
+  PublishedNewZoneInput: "PublishedNewBlockInput",
   DraftCreateComponentInput: "DraftCreateEntryInput",
   PublishedCreateComponentInput: "PublishedCreateEntryInput",
   DraftCreateZoneInput: "DraftCreateBlockInput",

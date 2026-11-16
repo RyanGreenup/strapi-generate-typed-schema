@@ -47,6 +47,9 @@ How it works:
    turns the types into JSON Schema under `ttsx`. The first run on a machine
    compiles the typia plugin, which takes a few minutes; later runs take
    seconds.
+4. Source content-type and component JSON supplies `conditions.visible`, which
+   Strapi's generated declarations omit. A postprocessing pass applies those
+   rules to the generated request and response schemas.
 
 ### Response constraints
 
@@ -86,6 +89,57 @@ Content types without draft-and-publish use the published restrictions directly.
 Nullable relations retain `null` as a separate alternative while grouping their
 overlapping draft/published variants under the document's `anyOf` schema.
 
+### Request states
+
+Draft-and-publish operations expose `*DraftCreateRequest`,
+`*PublishedCreateRequest`, `*DraftUpdateRequest`, and
+`*PublishedUpdateRequest` component schemas. The generic create/update request
+schema accepts draft input; the operation's `x-strapi-request-status` extension
+maps `status=draft` and `status=published` to their precise body schemas and
+records the core REST default, `published`. OpenAPI cannot express a dependency
+between a query parameter and the request body with standard schema keywords.
+Use the extension to select a state-specific validator.
+
+Draft input relaxes required scalar values, minimum lengths/ranges, email format,
+and UID patterns, while retaining scalar upper bounds. Components inherit the
+write state. Repeatable-component and dynamic-zone arrays remain non-null when
+sent; required arrays without defaults must be supplied on creation, even for
+drafts. Scalar defaults allow required fields to be omitted on creation.
+Updates allow omitted fields. Existing component IDs permit partial component
+updates; new components in a published update use creation requirements.
+
+System attributes and `writable: false` fields are excluded from inputs.
+Relation and media `required` markers do not make request fields mandatory:
+Strapi's `api.documents.strictRelations` defaults to false. The generator does
+not execute application configuration, check relation existence, or prove that
+a merged update is publishable. Projects enabling strict relation checks need
+additional runtime validation.
+
+### Conditional fields
+
+For source `conditions.visible` rules, visible fields retain their validation
+constraints, while invisible fields do not remain unconditionally required.
+Creation conditions account for schema defaults; update conditions use only
+the written payload, matching Strapi's validator. Response attribute keys stay
+optional for `fields` and `populate`. When a response omits a discriminator,
+visibility is unknown, so the schema does not impose visibility-dependent
+constraints that could reject a valid projection.
+
+The generator translates primitive equality/inequality (`==`, `!=`, `===`,
+`!==`), `and`, `or`, `!`, and membership in literal arrays. Coercive comparisons
+are translated only where their matching values can be represented. Unsupported
+expressions produce a warning and conservative validation instead of an
+invented guarantee. The original rules remain in `x-strapi-conditions`.
+
+Hidden input values are unconstrained because Strapi skips their entity
+validation. Hidden scalar responses retain their JSON primitive shape and
+allow null, without validation bounds. Hidden structured responses are
+conservatively unconstrained: preserving a published component reference would
+incorrectly reintroduce nested validation that Strapi skipped. Persistence and
+serialization can still reject or transform values; these schemas do not
+replace running the API.
+
+
 ### Limits
 
 - A custom handler gets its path, parameters and security, but no body schemas.
@@ -98,6 +152,9 @@ overlapping draft/published variants under the document's `anyOf` schema.
   custom-regex support.
 - Response restrictions describe the core REST API; custom controllers,
   middleware, or direct database writes can bypass Strapi's validation.
+- Regenerate Strapi declarations after schema edits. The generator combines those
+  declarations with source JSON; stale declarations or registration hooks that
+  change schemas can make the two inputs disagree.
 
 ## Rust example
 

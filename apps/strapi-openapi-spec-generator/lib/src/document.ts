@@ -285,10 +285,10 @@ const coreOperation = (
           default: "published",
           schemas: {
             draft: {
-              $ref: `#/components/schemas/${names[spec.request].replace(/(Create|Update)Request$/u, "Draft$1Request")}`,
+              $ref: `#/components/schemas/${names[spec.request].replace(/(?<action>Create|Update)Request$/u, "Draft$<action>Request")}`,
             },
             published: {
-              $ref: `#/components/schemas/${names[spec.request].replace(/(Create|Update)Request$/u, "Published$1Request")}`,
+              $ref: `#/components/schemas/${names[spec.request].replace(/(?<action>Create|Update)Request$/u, "Published$<action>Request")}`,
             },
           },
         },

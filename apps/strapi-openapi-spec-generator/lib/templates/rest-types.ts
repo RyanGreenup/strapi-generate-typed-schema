@@ -494,11 +494,17 @@ export type RestUpdateInput<U extends UID.Schema> =
 
 /** An id identifies an existing component, whose omitted values are retained. */
 export type PublishedComponentInput<C extends UID.Component> =
-  | ({ id: RowId } & RestPublishedUpdateInput<C>)
-  | ({ id?: never } & RestPublishedCreateInput<C>);
-export type DraftComponentInput<C extends UID.Component> =
-  | ({ id: RowId } & RestDraftUpdateInput<C>)
-  | ({ id?: never } & RestDraftCreateInput<C>);
+  | PublishedExistingComponentInput<C>
+  | PublishedNewComponentInput<C>;
+export type DraftComponentInput<C extends UID.Component> = {
+  id?: RowId;
+} & RestDraftUpdateInput<C>;
+export type PublishedExistingComponentInput<C extends UID.Component> = {
+  id: RowId;
+} & RestPublishedUpdateInput<C>;
+export type PublishedNewComponentInput<C extends UID.Component> = {
+  id?: never;
+} & RestPublishedCreateInput<C>;
 
 /** Named shapes keep component and zone metadata addressable after typia expansion. */
 export type PublishedCreateComponentInput<C extends UID.Component> = {
@@ -512,9 +518,14 @@ export type PublishedCreateZoneInput<C extends UID.Component> =
 export type DraftCreateZoneInput<C extends UID.Component> =
   DraftCreateComponentInput<C> & { __component: C };
 export type PublishedUpdateZoneInput<C extends UID.Component> =
-  PublishedComponentInput<C> & { __component: C };
+  | PublishedExistingZoneInput<C>
+  | PublishedNewZoneInput<C>;
 export type DraftUpdateZoneInput<C extends UID.Component> =
   DraftComponentInput<C> & { __component: C };
+export type PublishedExistingZoneInput<C extends UID.Component> =
+  PublishedExistingComponentInput<C> & { __component: C };
+export type PublishedNewZoneInput<C extends UID.Component> =
+  PublishedNewComponentInput<C> & { __component: C };
 
 export type RestPublishedCreateBody<U extends UID.ContentType> = {
   data: RestPublishedCreateInput<U>;
