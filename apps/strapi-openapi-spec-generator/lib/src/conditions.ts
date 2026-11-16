@@ -9,6 +9,7 @@ import { compilePredicate } from "./condition-predicates.js";
 import { listDirectories } from "./content-types.js";
 import { parseJsonObject, toRecord } from "./json.js";
 import { pascalCase } from "./names.js";
+import { shapeOnly } from "./shape-only.js";
 
 type Mode = ConditionContext["mode"];
 interface Model {
@@ -29,44 +30,6 @@ interface Field {
 
 const isUnknownArray = (value: unknown): value is unknown[] =>
   Array.isArray(value);
-
-const SCHEMAS = "#/components/schemas/";
-const BOUNDS = new Set([
-  "required",
-  "minItems",
-  "maxItems",
-  "minLength",
-  "maxLength",
-  "minimum",
-  "maximum",
-  "exclusiveMinimum",
-  "exclusiveMaximum",
-  "format",
-  "pattern",
-]);
-
-/** Drop bounds and point published refs at their draft schemas. */
-const shapeOnly = (
-  value: unknown,
-  schemas: Record<string, JsonSchema>,
-): unknown => {
-  if (isUnknownArray(value)) {
-    return value.map((entry) => shapeOnly(entry, schemas));
-  }
-  if (typeof value !== "object" || value === null) {
-    return value;
-  }
-  const result: JsonSchema = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (key === "$ref" && typeof entry === "string") {
-      const draft = entry.replace(/Published(?=Document$|Block$)/u, "Draft");
-      result[key] = draft.slice(SCHEMAS.length) in schemas ? draft : entry;
-    } else if (!BOUNDS.has(key)) {
-      result[key] = shapeOnly(entry, schemas);
-    }
-  }
-  return result;
-};
 
 const relaxed = (
   attribute: JsonSchema,
