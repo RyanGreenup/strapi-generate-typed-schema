@@ -10,7 +10,7 @@
  * Responses (`RestAnyDocument`): keys remain optional because `fields` and `populate`
  * select them. Published entries retain validation constraints and required values are
  * non-null when selected; drafts retain only the constraints Strapi enforces on drafts.
- * Components inherit their owner's state, but related documents have their own state.
+ * Components and draft-and-publish relation targets follow the selected publication state.
  * - `documentId` and the primary key `id` are always present.
  * - sanitizeOutput removes passwords and `private: true` attributes at every level.
  * - Dates, bigintegers, and epoch-millisecond timestamps are strings.
@@ -161,14 +161,22 @@ type PublishedArray<E, A> = A extends { required: true }
       : (E[] & tags.MaxItems<0>) | (E[] & ItemCount<A>)
     : E[] & ItemCount<A>;
 
+/** The query layer propagates status to populated targets that support draft-and-publish. */
+type RelatedDocument<T extends UID.ContentType, Published extends boolean> =
+  Schema.Schema<T> extends { options: { draftAndPublish: true } }
+    ? Published extends true
+      ? RestPublishedDocument<T>
+      : RestDraftDocument<T>
+    : RestPublishedDocument<T>;
+
 type PopulatedValue<A, Published extends boolean> = A extends {
   type: "relation";
   relation: infer R;
   target: infer T extends UID.ContentType;
 }
   ? R extends ToMany
-    ? RestAnyDocument<T>[]
-    : RestAnyDocument<T>
+    ? RelatedDocument<T, Published>[]
+    : RelatedDocument<T, Published>
   : A extends { type: "relation" }
     ? unknown // morphTo: no static target
     : // `multiple` and `repeatable` are optional in Strapi's attribute types: match `?: true`.

@@ -188,7 +188,9 @@ const applyModel = (schema: JsonSchema, context: ModelContext): void => {
     required.includes("id")
       ? { ...context, mode: "update" }
       : context;
-  applyBranches(schema, (branch) => applyModel(branch, nestedContext));
+  applyBranches(schema, (branch) => {
+    applyModel(branch, nestedContext);
+  });
   applyProperties(schema, nestedContext);
 };
 

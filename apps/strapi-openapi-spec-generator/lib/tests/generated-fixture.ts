@@ -13,6 +13,8 @@ import type { JsonSchema, OpenApiDocument } from "../src/index.js";
 
 import { generateSpecification } from "../src/index.js";
 
+const GENERATION_TIMEOUT = 600_000;
+
 interface GeneratedFixture {
   directory?: string;
   document?: OpenApiDocument;
@@ -72,7 +74,7 @@ export const generatedFixture = (
     await customize?.(directory);
     ({ document: fixture.document, warnings: fixture.warnings } =
       await generateSpecification({ projectDirectory: directory }));
-  }, 600_000);
+  }, GENERATION_TIMEOUT);
 
   afterAll(async () => {
     if (fixture.directory !== undefined) {
