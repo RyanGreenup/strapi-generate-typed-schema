@@ -20,6 +20,21 @@ import type { OpenApiDocument } from "../src/index.js";
 import { generateSpecification } from "../src/index.js";
 import { parseJsonObject, toRecord } from "../src/json.js";
 
+/** A relation, a component, a media field and a dynamic zone. */
+const STRUCTURED = ["page", "summary", "cover", "blocks"] as const;
+/** Make every structured field visible only when `rating` is 2. */
+const hideStructured = (
+  model: Record<string, unknown>,
+): Record<string, unknown> => {
+  const attributes = toRecord(model["attributes"]);
+  for (const key of STRUCTURED) {
+    toRecord(attributes[key])["conditions"] = {
+      visible: { "==": [{ var: "rating" }, 2] },
+    };
+  }
+  return model;
+};
+
 /* oxlint-disable unicorn/no-null -- Hidden fields can retain null values. */
 describe("generated conditional attribute validation", () => {
   let directory: string;
@@ -95,7 +110,7 @@ describe("generated conditional attribute validation", () => {
         ],
       },
     };
-    await writeFile(articleFile, JSON.stringify(article));
+    await writeFile(articleFile, JSON.stringify(hideStructured(article)));
     const componentFile = path.join(
       directory,
       "src/components/shared/seo.json",
@@ -210,6 +225,59 @@ describe("generated conditional attribute validation", () => {
     ).toBe(true);
     const create = validate("ApiArticleArticleDraftCreateInput");
     expect(create({ seo: [] })).toBe(true);
+  });
+
+  it("keeps the type of conditional structured fields for generated clients", () => {
+    const properties = toRecord(
+      document.components.schemas["ApiArticleArticlePublishedDocument"]?.[
+        "properties"
+      ],
+    );
+    // An empty schema becomes `unknown` in openapi-typescript output.
+    const references = Object.fromEntries(
+      STRUCTURED.map((key) => [
+        key,
+        /#\/components\/schemas\/\w+/u.exec(
+          JSON.stringify(properties[key]),
+        )?.[0],
+      ]),
+    );
+    expect(references).toStrictEqual({
+      page: "#/components/schemas/ApiPagePagePublishedDocument",
+      summary: "#/components/schemas/SharedSeoPublishedDocument",
+      cover: "#/components/schemas/PluginUploadFilePublishedDocument",
+      blocks: "#/components/schemas/SharedConditionalLinkPublishedBlock",
+    });
+  });
+
+  it("rejects wrongly typed hidden structured values without restoring their required rules", () => {
+    const accepts = validate("ApiArticleArticlePublishedDocument");
+    const hidden = (value: unknown): Record<string, boolean> =>
+      Object.fromEntries(
+        STRUCTURED.map((key) => [
+          key,
+          accepts({ ...published, rating: 3, [key]: value }),
+        ]),
+      );
+    expect(hidden(null)).toStrictEqual({
+      page: true,
+      summary: true,
+      cover: true,
+      blocks: true,
+    });
+    expect(hidden(42)).toStrictEqual({
+      page: false,
+      summary: false,
+      cover: false,
+      blocks: false,
+    });
+    // A retained hidden component may break its own required/minimum rules.
+    expect(
+      accepts({ ...published, rating: 3, summary: { id: 1, heading: null } }),
+    ).toBe(true);
+    expect(
+      accepts({ ...published, rating: 3, summary: { id: 1, heading: 42 } }),
+    ).toBe(false);
   });
 
   it("warns and retains unsupported source rules rather than pretending to compile them", () => {

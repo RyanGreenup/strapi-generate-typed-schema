@@ -23,24 +23,23 @@ interface Match {
 
 const all = (rules: Predicate[]): Predicate => ({ allOf: rules });
 const any = (rules: Predicate[]): Predicate => ({ anyOf: rules });
-const negate = (rule: Predicate): Predicate => ({ not: rule });
 const owns = (key: string): JsonSchema => ({ required: [key] });
 const scalar = (value: unknown): boolean =>
   value === null || ["string", "number", "boolean"].includes(typeof value);
-const isUnknownArray = (value: unknown): value is unknown[] => Array.isArray(value);
+const isUnknownArray = (value: unknown): value is unknown[] =>
+  Array.isArray(value);
 const enumeration = (values: unknown[]): Predicate =>
   values.length === 0 ? false : { enum: values };
 
 // Missing response discriminators are unknown: fields/populate may have omitted them.
 // Create sees schema defaults; update sees only the written data, not stored values.
-const atom = (
-  key: string,
-  match: Match,
-  context: ConditionContext,
-): Truth => {
+const atom = (key: string, match: Match, context: ConditionContext): Truth => {
   const present = all([owns(key), { properties: { [key]: match.predicate } }]);
-  const absent = negate(owns(key));
-  const no = all([owns(key), { properties: { [key]: negate(match.predicate) } }]);
+  const absent: Predicate = { not: owns(key) };
+  const no = all([
+    owns(key),
+    { properties: { [key]: { not: match.predicate } } },
+  ]);
   if (context.mode === "response") {
     return { yes: present, no };
   }
@@ -54,7 +53,10 @@ const atom = (
     : { yes: present, no: any([no, absent]) };
 };
 
-const variable = (value: unknown, context: ConditionContext): string | undefined => {
+const variable = (
+  value: unknown,
+  context: ConditionContext,
+): string | undefined => {
   const record = toRecord(value);
   const { var: key } = record;
   return Object.keys(record).length === 1 &&
@@ -110,7 +112,9 @@ const looseMatch = (
     return undefined;
   }
   return Number.isFinite(number)
-    ? { enum: [value, number, ...[true, false].filter((entry) => equal(entry))] }
+    ? {
+        enum: [value, number, ...[true, false].filter((entry) => equal(entry))],
+      }
     : { const: value };
 };
 
@@ -159,14 +163,14 @@ const membership = (
 const logical = (
   args: unknown[],
   operator: string,
-  context: ConditionContext,
+  compile: (rule: unknown) => Truth | undefined,
 ): Truth | undefined => {
   if (args.length === 0) {
     return undefined;
   }
   const terms: Truth[] = [];
   for (const arg of args) {
-    const term = compilePredicate(arg, context);
+    const term = compile(arg);
     if (term === undefined) {
       return undefined;
     }
@@ -211,7 +215,9 @@ const compilePredicate = (
   const [operator, raw] = entry;
   const args = isUnknownArray(raw) ? raw : [raw];
   if (operator === "and" || operator === "or") {
-    return logical(args, operator, context);
+    return logical(args, operator, (argument) =>
+      compilePredicate(argument, context),
+    );
   }
   if (operator === "!" && args.length === 1) {
     const [argument] = args;

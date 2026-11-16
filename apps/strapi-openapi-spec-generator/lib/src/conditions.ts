@@ -27,7 +27,8 @@ interface Field {
   visible: unknown;
 }
 
-const isUnknownArray = (value: unknown): value is unknown[] => Array.isArray(value);
+const isUnknownArray = (value: unknown): value is unknown[] =>
+  Array.isArray(value);
 
 const relaxed = (attribute: JsonSchema, response: boolean): JsonSchema => {
   if (!response) {
@@ -74,7 +75,9 @@ const variant = (suffix: string): Mode | undefined => {
     return suffix.includes("Update") ? "update" : "create";
   }
   if (
-    /^(?:Published|Draft)?(?:Create|Update|Existing|New)?(?:Entry|Block)Input$/u.test(suffix)
+    /^(?:Published|Draft)?(?:Create|Update|Existing|New)?(?:Entry|Block)Input$/u.test(
+      suffix,
+    )
   ) {
     return suffix.includes("Update") ||
       suffix.includes("Existing") ||
@@ -123,7 +126,11 @@ const applyProperties = (schema: JsonSchema, context: ModelContext): void => {
     const { visible } = toRecord(attribute["conditions"]);
     if (Boolean(visible) && key in properties) {
       conditions[key] = visible;
-      const branch = conditionalBranch(schema, { key, attribute, visible }, context);
+      const branch = conditionalBranch(
+        schema,
+        { key, attribute, visible },
+        context,
+      );
       if (branch !== undefined) {
         branches.push(branch);
       }
@@ -136,6 +143,19 @@ const applyProperties = (schema: JsonSchema, context: ModelContext): void => {
   }
 };
 
+const applyBranches = (
+  schema: JsonSchema,
+  visit: (branch: JsonSchema) => void,
+): void => {
+  for (const keyword of ["allOf", "anyOf", "oneOf"]) {
+    const entries = schema[keyword];
+    if (isUnknownArray(entries)) {
+      for (const entry of entries) {
+        visit(toRecord(entry));
+      }
+    }
+  }
+};
 const applyModel = (schema: JsonSchema, context: ModelContext): void => {
   if (context.visited.has(schema)) {
     return;
@@ -151,27 +171,20 @@ const applyModel = (schema: JsonSchema, context: ModelContext): void => {
     return;
   }
   const nestedContext: ModelContext =
-    context.mode !== "response" && isUnknownArray(required) && required.includes("id")
+    context.mode !== "response" &&
+    isUnknownArray(required) &&
+    required.includes("id")
       ? { ...context, mode: "update" }
       : context;
-  applyBranches(schema, nestedContext);
+  applyBranches(schema, (branch) => applyModel(branch, nestedContext));
   applyProperties(schema, nestedContext);
-};
-
-const applyBranches = (schema: JsonSchema, context: ModelContext): void => {
-  for (const keyword of ["allOf", "anyOf", "oneOf"]) {
-    const entries = schema[keyword];
-    if (isUnknownArray(entries)) {
-      for (const entry of entries) {
-        applyModel(toRecord(entry), context);
-      }
-    }
-  }
 };
 
 const modelMode = (name: string, uid: string): Mode | undefined => {
   const prefix = pascalCase(uid);
-  const named = name.startsWith(prefix) ? variant(name.slice(prefix.length)) : undefined;
+  const named = name.startsWith(prefix)
+    ? variant(name.slice(prefix.length))
+    : undefined;
   // typia preserves multi-argument helpers rather than renaming them. Its
   // OpenAPI names remove generic delimiters and escape UID punctuation.
   const decoded = name
@@ -198,15 +211,16 @@ const componentModels = async (root: string): Promise<Model[]> => {
   const groups = await Promise.all(
     categories.map(async (category) => {
       const files = await readdir(path.join(root, category));
-      return files.filter((file) => file.endsWith(".json")).map((file) => ({
-        uid: `${category}.${path.basename(file, ".json")}`,
-        file: path.join(root, category, file),
-      }));
+      return files
+        .filter((file) => file.endsWith(".json"))
+        .map((file) => ({
+          uid: `${category}.${path.basename(file, ".json")}`,
+          file: path.join(root, category, file),
+        }));
     }),
   );
   return groups.flat();
 };
-
 
 const applyConditions = async (
   projectDirectory: string,
@@ -235,7 +249,10 @@ const applyConditions = async (
   const definitions = await Promise.all(
     models.map(async (model) => {
       const source = await readFile(model.file, "utf8");
-      return { model, attributes: toRecord(parseJsonObject(source)["attributes"]) };
+      return {
+        model,
+        attributes: toRecord(parseJsonObject(source)["attributes"]),
+      };
     }),
   );
   const warnings = new Set<string>();
@@ -244,7 +261,14 @@ const applyConditions = async (
     for (const [name, schema] of Object.entries(schemas)) {
       const mode = modelMode(name, model.uid);
       if (mode !== undefined) {
-        applyModel(schema, { attributes, mode, uid: model.uid, warnings, schemas, visited });
+        applyModel(schema, {
+          attributes,
+          mode,
+          uid: model.uid,
+          warnings,
+          schemas,
+          visited,
+        });
       }
     }
   }

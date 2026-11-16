@@ -295,7 +295,7 @@ describe("generated response validation", () => {
     documentId: "fixture",
     publishedAt: "2026-11-17T00:00:00.000Z",
   };
-  const draft = { ...published, publishedAt: null };
+  const draftEntry = { ...published, publishedAt: null };
   const compileSchema = (schema: JsonSchema): ValidateFunction =>
     ajv.compile({ components: fixture.document?.components, ...schema });
   const validateDocument = (name: string): ValidateFunction =>
@@ -636,7 +636,7 @@ describe("generated response validation", () => {
       { email: "" },
       { rating: -1, price: -0.5 },
     ]) {
-      expect(validate({ ...draft, ...valid })).toBe(true);
+      expect(validate({ ...draftEntry, ...valid })).toBe(true);
     }
     for (const invalid of [
       { title: "12345678901" },
@@ -647,14 +647,14 @@ describe("generated response validation", () => {
       { title: 123 },
       { publishedAt: published.publishedAt },
     ]) {
-      expect(validate({ ...draft, ...invalid })).toBe(false);
+      expect(validate({ ...draftEntry, ...invalid })).toBe(false);
     }
   });
 
   it("keeps selected fields and populated attributes optional in both states", () => {
     for (const [name, entry] of [
       ["ApiArticleArticlePublishedDocument", published],
-      ["ApiArticleArticleDraftDocument", draft],
+      ["ApiArticleArticleDraftDocument", draftEntry],
     ] as const) {
       const validate = validateDocument(name);
       expect(validate(entry)).toBe(true);
@@ -688,14 +688,14 @@ describe("generated response validation", () => {
       [{ id: 1, heading: null }],
       [{ id: 1 }, { id: 2 }, { id: 3 }],
     ]) {
-      expect(validateDraft({ ...draft, seo })).toBe(true);
+      expect(validateDraft({ ...draftEntry, seo })).toBe(true);
     }
     expect(
-      validateDraft({ ...draft, seo: [{ id: 1, heading: "123456789" }] }),
+      validateDraft({ ...draftEntry, seo: [{ id: 1, heading: "123456789" }] }),
     ).toBe(false);
     expect(
       validateDraft({
-        ...draft,
+        ...draftEntry,
         page: { id: 2, documentId: "page", title: "1234" },
       }),
     ).toBe(false);
@@ -723,10 +723,10 @@ describe("generated response validation", () => {
       const validate = compileSchema(schema);
       expect(validate(response({ ...published, title: "12345" }))).toBe(true);
       expect(
-        validate(response({ ...draft, title: "", email: "invalid" })),
+        validate(response({ ...draftEntry, title: "", email: "invalid" })),
       ).toBe(true);
       expect(validate(response({ ...published, title: "1234" }))).toBe(false);
-      expect(validate(response({ ...draft, title: "12345678901" }))).toBe(
+      expect(validate(response({ ...draftEntry, title: "12345678901" }))).toBe(
         false,
       );
     },
