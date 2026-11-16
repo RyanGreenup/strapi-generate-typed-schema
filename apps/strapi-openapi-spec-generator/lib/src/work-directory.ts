@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import type { ContentType } from "./content-types.js";
 
-import { ERROR_SCHEMA, schemaNames } from "./names.js";
+import { ERROR_SCHEMA, pascalCase, schemaNames } from "./names.js";
 
 /** Everything `generateSchemas` needs. */
 interface SchemasInput {
@@ -40,7 +40,9 @@ const entrySource = (contentTypes: ContentType[]): string => {
   const aliases = contentTypes.flatMap((contentType) => {
     const names = schemaNames(contentType.uid);
     const uid = JSON.stringify(contentType.uid);
+    const name = pascalCase(contentType.uid);
     const shared = [
+      `type ${name}Document = RestAnyDocument<${uid}>;`,
       `type ${names.one} = RestAnyFindOne<${uid}>;`,
       `type ${names.update} = RestUpdateBody<${uid}>;`,
     ];
@@ -58,12 +60,20 @@ const entrySource = (contentTypes: ContentType[]): string => {
 
   return [
     'import typia from "typia";',
-    'import type { RestAnyFind, RestAnyFindOne, RestCreateBody, RestError, RestUpdateBody } from "./rest-types.ts";',
+    'import type { RestAnyDocument, RestAnyFind, RestAnyFindOne, RestCreateBody, RestError, RestUpdateBody } from "./rest-types.ts";',
     "// Declared here so that the file needs no Node.js type package.",
     "declare const process: { stdout: { write(text: string): void } };",
     ...aliases,
     `const generated = typia.json.schemas<[${[...aliasNames, ERROR_SCHEMA].join(", ")}], "3.1">();`,
-    String.raw`process.stdout.write("\n" + JSON.stringify(generated.components.schemas ?? {}) + "\n");`,
+    "const schemas = generated.components.schemas ?? {};",
+    `const names = ${JSON.stringify([...aliasNames, ERROR_SCHEMA])};`,
+    "// Only generic document unions need aliases; state objects already have generic names.",
+    "for (const [index, name] of names.entries()) {",
+    '  if (!name.endsWith("Document")) continue;',
+    "  const schema = generated.schemas[index]!;",
+    '  if (!("$ref" in schema)) schemas[name] ??= schema;',
+    "}",
+    String.raw`process.stdout.write("\n" + JSON.stringify(schemas) + "\n");`,
     "",
   ].join("\n");
 };

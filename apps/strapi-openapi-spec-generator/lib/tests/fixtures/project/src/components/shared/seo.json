@@ -1,0 +1,7 @@
+{
+  "collectionName": "components_shared_seo",
+  "info": { "displayName": "SEO" },
+  "attributes": {
+    "heading": { "type": "string", "required": true, "minLength": 3, "maxLength": 8 }
+  }
+}

@@ -1,12 +1,19 @@
+import { cp, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
 
-import type { OpenApiDocument, Operation } from "../src/index.js";
+import type { ValidateFunction } from "ajv";
+
+import { Ajv2020 } from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import type { JsonSchema, OpenApiDocument, Operation } from "../src/index.js";
 
 import {
   buildDocument,
-  entrySource,
   generateSpecification,
   readContentTypes,
   readRoutes,
@@ -230,21 +237,6 @@ describe("buildDocument", () => {
   });
 });
 
-describe("entrySource", () => {
-  it("declares one alias per schema and no list or create alias for a single type", async () => {
-    const source = entrySource(await readContentTypes(project));
-
-    expect(source).toContain(
-      'type ApiArticleArticleListResponse = RestAnyFind<"api::article.article">;',
-    );
-    expect(source).toContain(
-      'type ApiSiteSettingSiteSettingUpdateRequest = RestUpdateBody<"api::site-setting.site-setting">;',
-    );
-    expect(source).not.toContain("ApiSiteSettingSiteSettingListResponse");
-    expect(source).not.toContain("ApiSiteSettingSiteSettingCreateRequest");
-  });
-});
-
 describe("renameSchemas", () => {
   it("names a generic schema after its UID", () => {
     expect(
@@ -291,5 +283,214 @@ describe("generateSpecification", () => {
     await expect(
       generateSpecification({ projectDirectory: project }),
     ).rejects.toThrow("strapi ts:generate-types");
+  });
+});
+
+describe("generated response validation", () => {
+  let directory: string | undefined;
+  let document: OpenApiDocument;
+  const ajv = new Ajv2020({ strict: false });
+  addFormats(ajv);
+
+  const published = {
+    id: 1,
+    documentId: "fixture",
+    publishedAt: "2026-11-17T00:00:00.000Z",
+  };
+  const draft = { ...published, publishedAt: null };
+  const compileSchema = (schema: JsonSchema): ValidateFunction =>
+    ajv.compile({ components: document.components, ...schema });
+  const validateDocument = (name: string): ValidateFunction =>
+    compileSchema({ $ref: `#/components/schemas/${name}` });
+
+  beforeAll(async () => {
+    directory = await mkdtemp(path.join(os.tmpdir(), "strapi-openapi-test-"));
+    await cp(project, directory, { recursive: true });
+    const generated = path.join(directory, "types", "generated");
+    const modules = path.join(directory, "node_modules", "@strapi");
+    await Promise.all([
+      mkdir(generated, { recursive: true }),
+      mkdir(modules, { recursive: true }),
+    ]);
+    await Promise.all([
+      cp(
+        fileURLToPath(new URL("fixtures/generated-types", import.meta.url)),
+        generated,
+        { recursive: true },
+      ),
+      symlink(
+        path.dirname(
+          createRequire(import.meta.url).resolve("@strapi/strapi/package.json"),
+        ),
+        path.join(modules, "strapi"),
+      ),
+    ]);
+    ({ document } = await generateSpecification({
+      projectDirectory: directory,
+    }));
+  }, 600_000);
+
+  afterAll(async () => {
+    if (directory !== undefined) {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("validates published string lengths, email format and numeric ranges", () => {
+    const validate = validateDocument("ApiArticleArticlePublishedDocument");
+    expect(
+      validate({
+        ...published,
+        title: "12345",
+        email: "a@b.co",
+        rating: 2,
+        price: 0.5,
+      }),
+    ).toBe(true);
+    expect(
+      validate({
+        ...published,
+        title: "1234567890",
+        rating: 8,
+        email: `${"a".repeat(34)}@x.com`,
+        price: 10.5,
+      }),
+    ).toBe(true);
+    for (const invalid of [
+      { title: "1234" },
+      { title: "12345678901" },
+      { title: null },
+      { email: "not-an-email" },
+      { email: "a@b.c" },
+      { email: `${"a".repeat(35)}@x.com` },
+      { email: null },
+      { rating: 1 },
+      { rating: 9 },
+      { rating: 2.5 },
+      { price: 0.4 },
+      { price: 10.6 },
+      { publishedAt: null },
+    ]) {
+      expect(validate({ ...published, ...invalid }), JSON.stringify(invalid)).toBe(
+        false,
+      );
+    }
+  });
+
+  it("relaxes draft required, minimum length, email and numeric minimum rules only", () => {
+    const validate = validateDocument("ApiArticleArticleDraftDocument");
+    for (const valid of [
+      { title: "" },
+      { title: "1234" },
+      { title: null, email: null },
+      { email: "invalid" },
+      { email: "" },
+      { rating: -1, price: -0.5 },
+    ]) {
+      expect(validate({ ...draft, ...valid }), JSON.stringify(valid)).toBe(true);
+    }
+    for (const invalid of [
+      { title: "12345678901" },
+      { email: `${"a".repeat(35)}@x.com` },
+      { rating: 9 },
+      { rating: 2.5 },
+      { price: 10.6 },
+      { title: 123 },
+      { publishedAt: published.publishedAt },
+    ]) {
+      expect(validate({ ...draft, ...invalid }), JSON.stringify(invalid)).toBe(
+        false,
+      );
+    }
+  });
+
+  it("keeps selected fields and populated attributes optional in both states", () => {
+    for (const [name, entry] of [
+      ["ApiArticleArticlePublishedDocument", published],
+      ["ApiArticleArticleDraftDocument", draft],
+    ] as const) {
+      const validate = validateDocument(name);
+      expect(validate(entry)).toBe(true);
+      expect(validate({ id: 1, documentId: "fixture" })).toBe(true);
+      expect(validate({ ...entry, seo: [{ id: 1 }], page: null })).toBe(true);
+      expect(validate({ ...entry, rating: null, price: null })).toBe(true);
+    }
+  });
+
+  it("applies component restrictions in the parent state and keeps related non-draft documents strict", () => {
+    const validatePublished = validateDocument(
+      "ApiArticleArticlePublishedDocument",
+    );
+    const validateDraft = validateDocument("ApiArticleArticleDraftDocument");
+    expect(
+      validatePublished({ ...published, seo: [{ id: 1, heading: "SEO" }] }),
+    ).toBe(true);
+    for (const seo of [
+      null,
+      [],
+      [{ id: 1, heading: "ab" }],
+      [{ id: 1, heading: null }],
+      [{ id: 1 }, { id: 2 }, { id: 3 }],
+    ]) {
+      expect(validatePublished({ ...published, seo }), JSON.stringify(seo)).toBe(
+        false,
+      );
+    }
+    for (const seo of [
+      null,
+      [],
+      [{ id: 1, heading: "" }],
+      [{ id: 1, heading: null }],
+      [{ id: 1 }, { id: 2 }, { id: 3 }],
+    ]) {
+      expect(validateDraft({ ...draft, seo }), JSON.stringify(seo)).toBe(true);
+    }
+    expect(
+      validateDraft({ ...draft, seo: [{ id: 1, heading: "123456789" }] }),
+    ).toBe(false);
+    expect(
+      validateDraft({
+        ...draft,
+        page: { id: 2, documentId: "page", title: "1234" },
+      }),
+    ).toBe(false);
+  });
+
+  it("uses the draft/published union in real list and single operation responses", () => {
+    for (const [route, entries] of [
+      ["/articles", true],
+      ["/articles/{id}", false],
+    ] as const) {
+      const operation = document.paths[route]?.["get"];
+      const responses = toRecord(operation?.["responses"]);
+      const content = toRecord(toRecord(responses["200"])["content"]);
+      const schema = toRecord(toRecord(content["application/json"])["schema"]);
+      const validate = compileSchema(schema);
+      const response = (entry: unknown): JsonSchema => ({
+        data: entries ? [entry] : entry,
+        meta: entries ? { pagination: { page: 1, pageSize: 10 } } : {},
+      });
+      expect(validate(response({ ...published, title: "12345" }))).toBe(true);
+      expect(validate(response({ ...draft, title: "", email: "invalid" }))).toBe(
+        true,
+      );
+      expect(validate(response({ ...published, title: "1234" }))).toBe(false);
+      expect(validate(response({ ...draft, title: "12345678901" }))).toBe(false);
+    }
+  });
+
+  it("keeps non-draft content types strict and omits unsupported single-type aliases", () => {
+    const validate = validateDocument("ApiPagePageDocument");
+    const page = { id: 1, documentId: "page" };
+    expect(validate(page)).toBe(true);
+    expect(validate({ ...page, title: "12345" })).toBe(true);
+    expect(validate({ ...page, title: "1234" })).toBe(false);
+    expect(validate({ ...page, title: null })).toBe(false);
+    expect(document.components.schemas).not.toHaveProperty(
+      "ApiSiteSettingSiteSettingListResponse",
+    );
+    expect(document.components.schemas).not.toHaveProperty(
+      "ApiSiteSettingSiteSettingCreateRequest",
+    );
   });
 });

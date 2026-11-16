@@ -7,14 +7,13 @@
  * is compiled with the Strapi project's own `@strapi/strapi` types, so it cannot be
  * type-checked inside this package.
  *
- * Responses (`RestAnyDocument`): an OpenAPI operation has one response schema for every
- * query, so every attribute is optional (`fields` and `populate` select keys) and
- * nullable (a draft can leave any attribute empty). Modelled on the read pipeline:
+ * Responses (`RestAnyDocument`): keys remain optional because `fields` and `populate`
+ * select them. Published entries retain validation constraints and required values are
+ * non-null when selected; drafts retain only the constraints Strapi enforces on drafts.
+ * Components inherit their owner's state, but related documents have their own state.
  * - `documentId` and the primary key `id` are always present.
- * - sanitizeOutput removes password attributes and attributes with `private: true`, at
- *   every nested level.
- * - Dates are strings, a biginteger is a string, and a timestamp is the epoch in
- *   milliseconds as a string.
+ * - sanitizeOutput removes passwords and `private: true` attributes at every level.
+ * - Dates, bigintegers, and epoch-millisecond timestamps are strings.
  *
  * Request bodies (`RestCreateBody`, `RestUpdateBody`): what the core create and update
  * actions accept.
@@ -23,7 +22,7 @@
  * type, and typia turns each one into a JSON Schema keyword (format, pattern, minLength).
  *
  * Rules that a type cannot express, so the schemas do not have them:
- * - `unique`, custom validators, and the min and max of a biginteger.
+ * - `unique`, schema regexes, custom validators, and the min and max of a biginteger.
  * - A create body lists every required attribute as required. Strapi only enforces most
  *   of them when the entry is published: a `?status=draft` create accepts less.
  * - Strapi also accepts `locale` in a body. It is left out here: send it as a query parameter.
@@ -117,22 +116,54 @@ type Ids<U extends UID.Schema> = U extends UID.ContentType
   ? { id: RowId; documentId: DocumentId }
   : { id: RowId };
 
-type ScalarValue<A> = A extends {
-  type: "string" | "text" | "richtext" | "email" | "uid";
+/** Draft validation skips lower bounds and email validation, but keeps scalar upper bounds. */
+type ResponseLength<A, Published extends boolean> = (Published extends true
+  ? A extends { minLength: infer N extends number }
+    ? tags.MinLength<N>
+    : unknown
+  : unknown) &
+  (A extends { maxLength: infer N extends number }
+    ? tags.MaxLength<N>
+    : A extends { type: "string" }
+      ? tags.MaxLength<255>
+      : unknown);
+
+type ResponseRange<A, Published extends boolean> = (Published extends true
+  ? A extends { min: infer N extends number }
+    ? tags.Minimum<N>
+    : unknown
+  : unknown) &
+  (A extends { max: infer N extends number } ? tags.Maximum<N> : unknown);
+
+type ScalarValue<A, Published extends boolean> = A extends {
+  type: "string" | "text" | "richtext" | "uid";
 }
-  ? string
-  : A extends { type: "timestamp" | "biginteger" }
-    ? IntegerString // timestamp: epoch milliseconds
-    : A extends { type: "integer" }
-      ? Integer
-      : A extends { type: "float" | "decimal" }
-        ? number
-        : SharedValue<A>;
+  ? string & ResponseLength<A, Published>
+  : A extends { type: "email" }
+    ? string &
+        ResponseLength<A, Published> &
+        (Published extends true ? tags.Format<"email"> : unknown)
+    : A extends { type: "timestamp" | "biginteger" }
+      ? IntegerString // timestamp: epoch milliseconds
+      : A extends { type: "integer" }
+        ? Integer & ResponseRange<A, Published>
+        : A extends { type: "float" | "decimal" }
+          ? number & ResponseRange<A, Published>
+          : SharedValue<A>;
 
 /** The lifecycle subscriber database/src/lifecycles/subscribers/timestamps.ts always sets these. */
 type AlwaysSet = "createdAt" | "updatedAt";
 
-type PopulatedValue<A> = A extends {
+/** Optional component arrays may be empty even when their configured minimum is positive. */
+type PublishedArray<E, A> = A extends { required: true }
+  ? E[] & ItemCount<A>
+  : A extends { min: infer N extends number }
+    ? N extends 0
+      ? E[] & ItemCount<A>
+      : (E[] & tags.MaxItems<0>) | (E[] & ItemCount<A>)
+    : E[] & ItemCount<A>;
+
+type PopulatedValue<A, Published extends boolean> = A extends {
   type: "relation";
   relation: infer R;
   target: infer T extends UID.ContentType;
@@ -152,35 +183,76 @@ type PopulatedValue<A> = A extends {
               component: infer C extends UID.Component;
               repeatable?: true;
             }
-          ? RestAnyDocument<C>[]
+          ? Published extends true
+            ? PublishedArray<RestPublishedDocument<C>, A>
+            : RestDraftDocument<C>[]
           : A extends {
                 type: "component";
                 component: infer C extends UID.Component;
               }
-            ? RestAnyDocument<C>
+            ? Published extends true
+              ? RestPublishedDocument<C>
+              : RestDraftDocument<C>
             : A extends {
                   type: "dynamiczone";
                   components: infer Cs extends readonly UID.Component[];
                 }
-              ? Array<{ [C in Cs[number]]: RestAnyZoneEntry<C> }[Cs[number]]>
+              ? Published extends true
+                ? PublishedArray<{
+                    [C in Cs[number]]: RestPublishedZoneEntry<C>;
+                  }[Cs[number]], A>
+                : Array<{
+                    [C in Cs[number]]: RestDraftZoneEntry<C>;
+                  }[Cs[number]]>
               : never;
 
 /**
- * One REST entry (content type or component) for a query that is only known at run time.
+ * A published entry. All selected required scalar and component values are non-null.
+ * Relations and media can still be absent after population and output sanitization.
  *
- * This and the other generic object types below are plain intersections on purpose, without
- * a flattening helper: typia names a schema after the type alias, and a helper would hide it.
+ * Keep these objects as plain intersections: typia uses their alias as the schema name.
  */
-export type RestAnyDocument<U extends UID.Schema> = Ids<U> & {
-  [K in ScalarKey<U>]?: K extends AlwaysSet
-    ? ScalarValue<Attrs<U>[K]>
-    : ScalarValue<Attrs<U>[K]> | null;
-} & { [K in PopulatableKey<U>]?: PopulatedValue<Attrs<U>[K]> | null };
-
-/** A dynamic zone entry: the component and the tag that says which component it is. */
-export type RestAnyZoneEntry<C extends UID.Component> = RestAnyDocument<C> & {
-  __component: C;
+export type RestPublishedDocument<U extends UID.Schema> = Ids<U> & {
+  [K in ScalarKey<U>]?: K extends
+    | AlwaysSet
+    | (U extends UID.ContentType ? "publishedAt" : never)
+    ? ScalarValue<Attrs<U>[K], true>
+    : Attrs<U>[K] extends { required: true }
+      ? Exclude<ScalarValue<Attrs<U>[K], true>, null>
+      : ScalarValue<Attrs<U>[K], true> | null;
+} & {
+  [K in PopulatableKey<U>]?: Attrs<U>[K] extends {
+    type: "component" | "dynamiczone";
+    required: true;
+  }
+    ? PopulatedValue<Attrs<U>[K], true>
+    : PopulatedValue<Attrs<U>[K], true> | null;
 };
+
+/** A draft entry, including components validated as part of a draft owner. */
+export type RestDraftDocument<U extends UID.Schema> = Ids<U> & {
+  [K in ScalarKey<U>]?: K extends AlwaysSet
+    ? ScalarValue<Attrs<U>[K], false>
+    : K extends (U extends UID.ContentType ? "publishedAt" : never)
+      ? null
+      : ScalarValue<Attrs<U>[K], false> | null;
+} & { [K in PopulatableKey<U>]?: PopulatedValue<Attrs<U>[K], false> | null };
+
+/**
+ * A runtime-selected entry. Without draft-and-publish, writes use published validation.
+ * Otherwise either state is valid. `publishedAt` is optional because fields can omit it,
+ * so the two branches may overlap and their JSON Schema union must not be exclusive.
+ */
+export type RestAnyDocument<U extends UID.Schema> =
+  Schema.Schema<U> extends { options: { draftAndPublish: false } }
+    ? RestPublishedDocument<U>
+    : RestPublishedDocument<U> | RestDraftDocument<U>;
+
+/** A dynamic zone entry, with the component discriminator retained in both states. */
+export type RestPublishedZoneEntry<C extends UID.Component> =
+  RestPublishedDocument<C> & { __component: C };
+export type RestDraftZoneEntry<C extends UID.Component> =
+  RestDraftDocument<C> & { __component: C };
 
 export type RestPagination =
   | { page: number; pageSize: number; pageCount?: number; total?: number }

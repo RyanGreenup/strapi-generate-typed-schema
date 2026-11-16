@@ -2,5 +2,24 @@
   "kind": "collectionType",
   "info": { "singularName": "article", "pluralName": "articles" },
   "options": { "draftAndPublish": true },
-  "attributes": { "title": { "type": "string", "required": true } }
+  "attributes": {
+    "title": { "type": "string", "required": true, "minLength": 5, "maxLength": 10 },
+    "email": { "type": "email", "required": true, "minLength": 6, "maxLength": 40 },
+    "rating": { "type": "integer", "min": 2, "max": 8 },
+    "price": { "type": "decimal", "min": 0.5, "max": 10.5 },
+    "seo": {
+      "type": "component",
+      "component": "shared.seo",
+      "repeatable": true,
+      "required": true,
+      "min": 1,
+      "max": 2
+    },
+    "page": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::page.page",
+      "required": true
+    }
+  }
 }

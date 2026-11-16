@@ -56,6 +56,8 @@ catalog:
   typia: ^15.4.1
   vitest: ^5.0.4
   dependency-cruiser: ^18.7.0
+  '@strapi/strapi': 5.62.0
+  ajv-formats: ^3.0.1
 catalogs:
   # OpenTUI's Solid compiler and runtime must use the same version.
   tui:
