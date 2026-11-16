@@ -70,6 +70,50 @@ export type JsonValue =
   | JsonValue[]
   | JsonObject;
 
+// Rich text as Strapi stores it. Strapi declares a link's `rel` and `target`
+// required, but the blocks editor writes them only when an editor sets them;
+// imported text can also carry superscript and subscript marks. A project may
+// store a paragraph `fontSize`; Strapi's validator keeps unknown keys.
+type TextNode = {
+  type: "text";
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strikethrough?: boolean;
+  code?: boolean;
+  superscript?: boolean;
+  subscript?: boolean;
+};
+type LinkNode = {
+  type: "link";
+  url: string;
+  children: TextNode[];
+  rel?: string;
+  target?: string;
+};
+type InlineNode = TextNode | LinkNode;
+type ListItemNode = { type: "list-item"; children: InlineNode[] };
+type ListNode = {
+  type: "list";
+  format: "ordered" | "unordered";
+  children: (ListItemNode | ListNode)[];
+  indentLevel?: number;
+};
+type RichTextNode<Image> =
+  | { type: "paragraph"; children: InlineNode[]; fontSize?: number }
+  | { type: "quote"; children: InlineNode[] }
+  | { type: "code"; language?: string; children: InlineNode[] }
+  | { type: "heading"; level: 1 | 2 | 3 | 4 | 5 | 6; children: InlineNode[] }
+  | ListNode
+  | { type: "image"; image: Image; children: [{ type: "text"; text: "" }] };
+/** The image of Strapi's own image node, kept as Strapi declares it. */
+type BlocksImage<Value> = Value extends readonly (infer Node)[]
+  ? Extract<Node, { type: "image" }> extends { image: infer Image }
+    ? Image
+    : never
+  : never;
+
 type Integer = number & tags.Type<"int64">;
 type IntegerString = string & tags.Pattern<"^-?\\d+$">;
 type DateString = string & tags.Format<"date">;
@@ -104,7 +148,11 @@ type SharedValue<A> = A extends { type: "datetime" }
             ? JsonValue
             : A extends { type: "blocks" }
               ? Jsonify<
-                  Schema.Attribute.Value<A & Schema.Attribute.AnyAttribute>
+                  RichTextNode<
+                    BlocksImage<
+                      Schema.Attribute.Value<A & Schema.Attribute.AnyAttribute>
+                    >
+                  >[]
                 >
               : unknown;
 
