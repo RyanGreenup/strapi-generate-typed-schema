@@ -1,0 +1,7 @@
+{
+  "kind": "collectionType",
+  "info": { "singularName": "page", "pluralName": "pages" },
+  "options": { "draftAndPublish": false },
+  "pluginOptions": { "i18n": { "localized": true } },
+  "attributes": { "title": { "type": "string" } }
+}

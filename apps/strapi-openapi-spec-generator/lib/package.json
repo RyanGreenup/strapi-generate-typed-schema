@@ -2,11 +2,12 @@
   "name": "@ryangreenup/strapi-openapi-spec-generator-lib",
   "version": "0.0.1",
   "private": true,
-  "description": "CLI to generate Strapi API OpenAPI Spec",
+  "description": "Generate an OpenAPI specification from the types of a Strapi project",
   "license": "MIT",
   "author": "Ryan Greenup <ryanxgreenup@gmail.com>",
   "files": [
-    "dist"
+    "dist",
+    "templates"
   ],
   "type": "module",
   "types": "./src/index.ts",
@@ -26,7 +27,12 @@
     "release": "bumpp",
     "prepublishOnly": "pnpm run build"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@typescript/native": "catalog:",
+    "ttsc": "catalog:",
+    "typescript": "catalog:",
+    "typia": "catalog:"
+  },
   "devDependencies": {
     "@ryangreenup/oxlint-config": "workspace:*",
     "@ryangreenup/typescript-config": "workspace:*",
@@ -37,7 +43,6 @@
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
     "tsdown": "catalog:",
-    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

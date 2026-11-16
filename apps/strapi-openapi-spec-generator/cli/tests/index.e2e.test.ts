@@ -1,17 +1,19 @@
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 
 vi.setConfig({ testTimeout: 10_000 });
 
 describe("cli", () => {
-  it("prints the provided message", () => {
-    const { stdout } = spawnSync(
+  it("fails with a message when the directory is not a Strapi project", () => {
+    const { stdout, stderr, status } = spawnSync(
       process.execPath,
-      ["./dist/index.mjs", "list", "--message", "hello world"],
+      ["./dist/index.mjs", "generate", tmpdir()],
       { encoding: "utf8" },
     );
 
-    expect(stdout.trim()).toBe("hello world");
+    expect({ status, stdout }).toStrictEqual({ status: 1, stdout: "" });
+    expect(stderr).toContain("is not a Strapi project");
   });
 
   it.each(["bash", "zsh", "fish", "powershell"])(
@@ -28,7 +30,7 @@ describe("cli", () => {
     },
   );
 
-  it("includes list options in the completion definition", () => {
+  it("includes generate options in the completion definition", () => {
     const { stdout, stderr, status } = spawnSync(
       process.execPath,
       ["./dist/index.mjs", "complete", "fig"],
@@ -36,7 +38,9 @@ describe("cli", () => {
     );
 
     expect({ status, stderr }).toStrictEqual({ status: 0, stderr: "" });
-    expect(stdout).toContain('"name": "strapi-openapi-spec-generator-cli list"');
-    expect(stdout).toContain('"name": "--message"');
+    expect(stdout).toContain(
+      '"name": "strapi-openapi-spec-generator-cli generate"',
+    );
+    expect(stdout).toContain('"name": "--output"');
   });
 });

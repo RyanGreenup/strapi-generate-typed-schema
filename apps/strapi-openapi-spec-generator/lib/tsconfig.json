@@ -1,4 +1,10 @@
 {
   "extends": "@ryangreenup/typescript-config/node-app.json",
-  "include": ["src", "tests"]
+  "compilerOptions": {
+    // Node 22 has the ES2023 array methods.
+    "lib": ["ES2023"]
+  },
+  "include": ["src", "tests"],
+  // The fixture is a Strapi project and templates/ is compiled inside one: neither resolves here.
+  "exclude": ["tests/fixtures"]
 }

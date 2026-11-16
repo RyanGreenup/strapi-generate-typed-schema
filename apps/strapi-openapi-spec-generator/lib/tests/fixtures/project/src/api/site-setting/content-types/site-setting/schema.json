@@ -1,0 +1,5 @@
+{
+  "kind": "singleType",
+  "info": { "singularName": "site-setting", "pluralName": "site-settings" },
+  "attributes": { "siteName": { "type": "string" } }
+}

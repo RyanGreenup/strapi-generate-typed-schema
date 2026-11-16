@@ -381,6 +381,11 @@ module.exports = {
         // match inside node_modules and silently drop every edge to a
         // package whose entry point lives in its own dist/.
         "^(?:dist|build|out|coverage)/",
+        // A fixture Strapi project, and types that are compiled inside the
+        // consumer's Strapi project: both import @strapi/strapi, which this
+        // workspace does not install.
+        "^tests/fixtures/",
+        "^templates/",
         "(^|/)[.](?:turbo|cache|next|nuxt|svelte-kit|output)/",
         "[.]min[.](?:js|cjs|mjs)$",
       ],

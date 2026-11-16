@@ -1,0 +1,6 @@
+{
+  "kind": "collectionType",
+  "info": { "singularName": "article", "pluralName": "articles" },
+  "options": { "draftAndPublish": true },
+  "attributes": { "title": { "type": "string", "required": true } }
+}
