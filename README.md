@@ -139,7 +139,6 @@ incorrectly reintroduce nested validation that Strapi skipped. Persistence and
 serialization can still reject or transform values; these schemas do not
 replace running the API.
 
-
 ### Limits
 
 - A custom handler gets its path, parameters and security, but no body schemas.
