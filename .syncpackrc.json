@@ -1,0 +1,32 @@
+{
+  "$schema": "https://unpkg.com/syncpack@15.3.3/dist/schema.json",
+  "versionGroups": [
+    {
+      "label": "Internal packages are always consumed through the workspace protocol.",
+      "dependencies": ["@ryangreenup/**"],
+      "dependencyTypes": ["!local"],
+      "pinVersion": "workspace:*"
+    },
+    {
+      "label": "A peer range is a contract with the package consumer and should be left as wide as described; peers only need to agree with each other.",
+      "dependencyTypes": ["peer"],
+      "preferVersion": "highestSemver"
+    },
+    {
+      "label": "Every other dependency is declared once in the `catalog` block of pnpm-workspace.yaml and consumed with the `catalog:` protocol.",
+      "dependencyTypes": ["prod", "dev"],
+      "policy": "catalog",
+      "severity": {
+        "NotUsingCatalog": "fix",
+        "MissingFromCatalog": "fix"
+      }
+    }
+  ],
+  "updateGroups": [
+    {
+      "label": "Leave TypeScript alone until v7 is released proper.",
+      "dependencies": ["typescript"],
+      "isIgnored": true
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "name": "@ryangreenup/strapi-openapi-spec-generator-web-app",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Strapi OpenAPI Spec Generator web app",
+  "license": "MIT",
+  "author": "Ryan Greenup <ryanxgreenup@gmail.com>",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "serve": "vite preview",
+    "check-types": "tsgo --skipLibCheck --noEmit",
+    "format": "oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --write .",
+    "lint": "oxlint --type-aware --type-check . && oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --check .",
+    "fix": "oxlint --fix --fix-suggestions --type-aware --type-check ."
+  },
+  "dependencies": {
+    "solid-devtools": "catalog:",
+    "solid-js": "catalog:"
+  },
+  "devDependencies": {
+    "@ryangreenup/oxlint-config": "workspace:*",
+    "@ryangreenup/typescript-config": "workspace:*",
+    "@types/node": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plugin-solid": "catalog:"
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "packageManager": "pnpm@12.11.2"
+}

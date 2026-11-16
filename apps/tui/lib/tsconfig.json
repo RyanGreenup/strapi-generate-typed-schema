@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "strict": true,
+    "moduleResolution": "Bundler",
+    "module": "Preserve",
+    "moduleDetection": "force",
+    "noEmit": true,
+    "types": ["bun"],
+    "skipLibCheck": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true
+  },
+  "include": ["index.d.ts", "__test__/**/*.ts"],
+  "exclude": ["node_modules", "target"]
+}

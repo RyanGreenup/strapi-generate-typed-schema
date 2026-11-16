@@ -1,0 +1,27 @@
+{
+  "name": "@ryangreenup/tui-example-lib",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "cargo test --lib --locked && bun test __test__",
+    "lint": "cargo clippy --all-targets --locked -- -D warnings && cargo fmt --all --check && oxlint . && oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --check .",
+    "check-types": "tsc --noEmit",
+    "format": "cargo fmt --all && oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --write .",
+    "fix": "cargo fmt --all && oxlint --fix --fix-suggestions ."
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "catalog:",
+    "@ryangreenup/oxlint-config": "workspace:*",
+    "@types/bun": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:tui-lib"
+  },
+  "napi": {
+    "binaryName": "rs-lib"
+  }
+}

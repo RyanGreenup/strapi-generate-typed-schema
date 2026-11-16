@@ -1,0 +1,49 @@
+{
+  "name": "@ryangreenup/strapi-openapi-spec-generator-cli",
+  "version": "0.0.1",
+  "private": true,
+  "description": "CLI to generate Strapi API OpenAPI Spec",
+  "license": "MIT",
+  "author": "Ryan Greenup <ryanxgreenup@gmail.com>",
+  "bin": {
+    "strapi-openapi-spec-generator-cli": "./dist/index.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "cli": "pnpm run build && node ./dist/index.mjs",
+    "test": "vitest run tests/index.test.ts",
+    "test:e2e": "vitest run tests/index.e2e.test.ts",
+    "check-types": "tsgo --skipLibCheck --noEmit",
+    "format": "oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --write .",
+    "lint": "oxlint --type-aware --type-check . && oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --check .",
+    "fix": "oxlint --fix --fix-suggestions --type-aware --type-check .",
+    "release": "bumpp",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "@bomb.sh/tab": "catalog:",
+    "@ryangreenup/strapi-openapi-spec-generator-lib": "workspace:*",
+    "citty": "catalog:"
+  },
+  "devDependencies": {
+    "@ryangreenup/oxlint-config": "workspace:*",
+    "@ryangreenup/typescript-config": "workspace:*",
+    "@types/node": "catalog:",
+    "bumpp": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

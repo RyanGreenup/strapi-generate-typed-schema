@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
+    // Environment setup & latest features
+    // DOM libs are required by solid-js's JSX types (Element, Node, InputEvent);
+    // without them JSX.Element resolves to an error type that skipLibCheck hides
+    // from tsc but typed lint rules still see. Upstream opencode does the same.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "moduleDetection": "force",
+    "module": "Preserve",
+
+    // Bundler mode
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "allowImportingTsExtensions": true,
+
+    "allowJs": true,
+    // Best practices
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+
+    "noPropertyAccessFromIndexSignature": false,
+    "noUncheckedIndexedAccess": true,
+    // Some stricter flags (disabled by default)
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true
+  },
+  "exclude": ["dist"]
+}

@@ -1,0 +1,45 @@
+[settings]
+sops.rops = false # Use the real sops CLI instead of mise's builtin Rust parser
+
+[vars]
+# Set to false to disable CLI building, linking, and completion loading on entry.
+cli_auto_setup = true
+
+[env]
+'_'.file = { path = ".env.yaml" }
+
+[tools]
+age = "latest"
+bun = "latest"
+sops = "latest"
+
+# Prepare the CLI once on entry, including when entering a project subdirectory.
+[[hooks.enter]]
+run = '''
+{% if vars.cli_auto_setup %}
+set -e
+cd "{{config_root}}"
+pnpm exec turbo run build --filter='@ryangreenup/strapi-openapi-spec-generator-cli...' >&2
+bun link --cwd apps/strapi-openapi-spec-generator/cli >&2
+{% endif %}
+'''
+
+[[hooks.enter]]
+shell = "fish"
+script = '{% if vars.cli_auto_setup %}node "{{config_root}}/apps/strapi-openapi-spec-generator/cli/dist/index.mjs" complete fish | source{% endif %}'
+
+[[hooks.enter]]
+shell = "bash"
+script = '{% if vars.cli_auto_setup %}source <(node "{{config_root}}/apps/strapi-openapi-spec-generator/cli/dist/index.mjs" complete bash){% endif %}'
+
+[[hooks.enter]]
+shell = "zsh"
+script = '''
+{% if vars.cli_auto_setup %}
+if ! (( $+functions[compdef] )); then
+  autoload -Uz compinit
+  compinit
+fi
+source <(node "{{config_root}}/apps/strapi-openapi-spec-generator/cli/dist/index.mjs" complete zsh)
+{% endif %}
+'''

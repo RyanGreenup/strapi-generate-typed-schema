@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "types": ["node", "vitest/globals"],
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "eslint.config.mjs",
+    "scripts/**/*.mjs",
+    "src/**/*.js",
+    "test/**/*.js"
+  ]
+}

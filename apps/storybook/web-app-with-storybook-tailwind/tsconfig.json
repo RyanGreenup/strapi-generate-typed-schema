@@ -1,0 +1,8 @@
+{
+  "extends": "@ryangreenup/typescript-config/solid-vite-app.json",
+  "compilerOptions": {
+    // Storybook `meta` objects use `satisfies`, which cannot be isolated declarations
+    "isolatedDeclarations": false
+  },
+  "include": ["src", ".storybook", "vite.config.ts"]
+}

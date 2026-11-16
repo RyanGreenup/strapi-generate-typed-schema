@@ -1,0 +1,35 @@
+{
+  "name": "@ryangreenup/opentui-template-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A terminal UI built with OpenTUI and SolidJS. Using Rust as the backend",
+  "bin": {
+    "rust-example": "./dist/rust-example"
+  },
+  "type": "module",
+  "module": "src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "build": "bun run build.ts",
+    "check-types": "tsc --noEmit",
+    "test": "bun test",
+    "lint": "oxlint . && oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --check .",
+    "format": "oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --write .",
+    "fix": "oxlint --fix --fix-suggestions ."
+  },
+  "dependencies": {
+    "@opentui/core": "catalog:",
+    "@opentui/keymap": "catalog:",
+    "@opentui/solid": "catalog:",
+    "@ryangreenup/tui-components": "workspace:*",
+    "@ryangreenup/tui-example-lib": "workspace:*",
+    "solid-js": "catalog:tui"
+  },
+  "devDependencies": {
+    "@ryangreenup/oxlint-config": "workspace:*",
+    "@types/bun": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:"
+  }
+}

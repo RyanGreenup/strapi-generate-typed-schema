@@ -1,0 +1,51 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "tui",
+  "tasks": {
+    "transit": {
+      "dependsOn": ["^transit"]
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "outputs": ["dist/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "check-types": {
+      "dependsOn": ["transit", "^build"]
+    },
+    "format": {
+      "cache": false
+    },
+    "lint": {
+      "dependsOn": ["transit", "^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/.gitignore"]
+    },
+    "fix": {
+      // Fix shared configurations before packages that consume them.
+      "dependsOn": ["^build", "^fix"],
+      "cache": false
+    },
+    "test": {
+      "dependsOn": ["^transit", "^build"],
+      "outputs": []
+    },
+    "test:coverage": {
+      "dependsOn": ["^transit", "^build"],
+      "outputs": ["coverage/**"]
+    },
+    "test:e2e": {
+      "dependsOn": ["build"]
+    },
+    "release": {
+      "cache": false
+    },
+    "prepublishOnly": {
+      "dependsOn": ["build"],
+      "cache": false
+    }
+  }
+}

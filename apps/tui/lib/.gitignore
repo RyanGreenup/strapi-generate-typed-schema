@@ -1,0 +1,11 @@
+/node_modules/
+/target/
+/.turbo/
+/coverage/
+*.log
+*.tsbuildinfo
+
+# Generated NAPI loader, declarations, and platform binaries.
+/index.js
+/index.d.ts
+*.node

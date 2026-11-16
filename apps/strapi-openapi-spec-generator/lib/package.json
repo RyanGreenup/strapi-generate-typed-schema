@@ -1,0 +1,43 @@
+{
+  "name": "@ryangreenup/strapi-openapi-spec-generator-lib",
+  "version": "0.0.1",
+  "private": true,
+  "description": "CLI to generate Strapi API OpenAPI Spec",
+  "license": "MIT",
+  "author": "Ryan Greenup <ryanxgreenup@gmail.com>",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "vitest run tests/index.test.ts",
+    "check-types": "tsgo --skipLibCheck --noEmit",
+    "format": "oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --write .",
+    "lint": "oxlint --type-aware --type-check . && oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --check .",
+    "fix": "oxlint --fix --fix-suggestions --type-aware --type-check .",
+    "test:coverage": "vitest run tests/index.test.ts --coverage",
+    "release": "bumpp",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@ryangreenup/oxlint-config": "workspace:*",
+    "@ryangreenup/typescript-config": "workspace:*",
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "bumpp": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

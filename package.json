@@ -1,0 +1,42 @@
+{
+  "name": "strapi-openapi-spec-generator",
+  "version": "0.0.1",
+  "private": true,
+  "description": "CLI to generate Strapi API OpenAPI Spec",
+  "license": "MIT",
+  "author": "Ryan Greenup <ryanxgreenup@gmail.com>",
+  "type": "module",
+  "scripts": {
+    "build": "turbo run build",
+    "check": "pnpm run check:scripts && pnpm run check:lockfile && pnpm run deps:lint && turbo run build lint check-types test test:e2e && pnpm run deps:cruise",
+    "check:lockfile": "pnpm install --lockfile-only --frozen-lockfile --ignore-scripts",
+    "check:scripts": "node scripts/check-scripts.mjs",
+    "check-types": "turbo run check-types",
+    "deps:cruise": "node scripts/depcruise.mjs",
+    "deps:fix": "syncpack fix",
+    "deps:lint": "syncpack lint",
+    "dev": "turbo run dev",
+    "fix": "turbo run fix format",
+    "format": "turbo run format",
+    "lint": "turbo run lint",
+    "prepare": "if git rev-parse --git-dir >/dev/null 2>&1; then lefthook install; fi",
+    "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e --filter=@ryangreenup/strapi-openapi-spec-generator-cli"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "dependency-cruiser": "catalog:",
+    "lefthook": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
+    "syncpack": "catalog:",
+    "turbo": "catalog:",
+    "typescript": "catalog:"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@12.11.2"
+}

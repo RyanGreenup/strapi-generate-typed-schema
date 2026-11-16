@@ -1,0 +1,11 @@
+{
+  "extends": "@ryangreenup/typescript-config/solid-vite-app.json",
+  "compilerOptions": {
+    // Storybook `meta` objects use `satisfies`, which cannot be isolated declarations
+    "isolatedDeclarations": false,
+    // An app emits no declarations; inferred recipe types are not portable under pnpm
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["src", "tests", "vite.config.ts"]
+}

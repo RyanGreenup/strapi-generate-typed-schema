@@ -1,0 +1,28 @@
+[rerere]
+    # record conflict resolutions and replay them automatically (easier rebase)
+    enabled = true
+     # stage files rerere resolved, so one can simply `git rebase --continue`
+    autoUpdate = true
+
+[rebase]
+    autoStash = true              # stash dirty work before rebasing, pop it after
+    autoSquash = true             # apply fixup!/squash!/amend! commits automatically in -i
+    updateRefs = true             # move stacked branches pointing into the rebased range
+    missingCommitsCheck = error   # refuse if you accidentally delete a line in the todo list
+    abbreviateCommands = true     # p/r/e/s/f in the todo list, easier to edit
+    # rebaseMerges = true         # preserve merge topology by default (git ≥ 2.42); optional
+
+[pull]
+    rebase = true         # or "merges" to also preserve local merge commits
+
+[merge]
+    conflictStyle = zdiff3   # shows the base version in conflicts; much easier to resolve (git ≥ 2.35)
+
+[diff]
+    algorithm = histogram    # cleaner diffs, often fewer spurious conflicts
+
+[push]
+    useForceIfIncludes = true   # makes --force-with-lease safer after rebasing (git ≥ 2.30)
+
+[fetch]
+    prune = true
