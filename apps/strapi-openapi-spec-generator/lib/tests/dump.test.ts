@@ -1,3 +1,5 @@
+import type { Mock } from "vitest";
+
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
@@ -13,16 +15,27 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { OpenApiDocument } from "../src/document.js";
+import type { DumpManifest, DumpOptions } from "../src/index.js";
 
 import { dump } from "../src/index.js";
 import { isUnknownArray, parseJsonObject, toRecord } from "../src/json.js";
 import { generatedFixture } from "./generated-fixture.js";
+
+vi.setConfig({ testTimeout: 5000 });
 
 const baseUrl = "https://cms.example/install";
 const token = "test-only-bearer-secret";
 const article = "api::article.article";
 const pageUid = "api::page.page";
 const timestamp = "2025-05-01T12:34:56.000Z";
+const articlesPath = "/install/api/articles";
+const pagesPath = "/install/api/pages";
+// Strapi sends null for unpublished timestamps; the dump writes null locales.
+// oxlint-disable-next-line unicorn/no-null
+const wireNull = null;
+
+type Entry = DumpManifest["entries"][number];
+type PublicationStatus = Entry["status"];
 
 /** Complete the source models in the isolated fixture, as a real export requires. */
 const customize = async (directory: string): Promise<void> => {
@@ -89,19 +102,40 @@ const customize = async (directory: string): Promise<void> => {
 };
 
 const sorted = (value: unknown): unknown => {
-  if (isUnknownArray(value)) return value.map(sorted);
-  if (value === null || typeof value !== "object") return value;
+  if (isUnknownArray(value)) {
+    return value.map((item) => sorted(item));
+  }
+  if (value === wireNull || typeof value !== "object") {
+    return value;
+  }
   const record = toRecord(value);
   return Object.fromEntries(
     Object.keys(record)
-      .sort()
+      .toSorted()
       .map((key) => [key, sorted(record[key])]),
   );
 };
 
+const jsonText = (value: unknown): string =>
+  `${JSON.stringify(sorted(value), undefined, 2)}\n`;
+
+const readJson = async (file: string | URL): Promise<Record<string, unknown>> =>
+  parseJsonObject(await readFile(file, "utf8"));
+
+const readTexts = (
+  directory: string,
+  files: readonly string[],
+): Promise<string[]> =>
+  Promise.all(
+    files.map((file) => readFile(path.join(directory, file), "utf8")),
+  );
+
+const manifestFile = (directory: string): string =>
+  path.join(directory, "manifest.json");
+
 const stubFetch = (
   respond: (url: URL, request: Request) => Response | Promise<Response>,
-) => {
+): Mock<typeof fetch> => {
   const mock = vi.fn<typeof fetch>((input, init) => {
     const request = new Request(input, init);
     return Promise.resolve(respond(new URL(request.url), request));
@@ -110,14 +144,44 @@ const stubFetch = (
   return mock;
 };
 
+const stubResponses = (
+  key: (url: URL) => string,
+  replies: Readonly<Partial<Record<string, () => Response>>>,
+): Mock<typeof fetch> =>
+  stubFetch((url) => {
+    const reply = replies[key(url)];
+    assert.ok(reply !== undefined, `Unexpected GET ${url.href}`);
+    return reply();
+  });
+
+const sentRequests = (mock: Mock<typeof fetch>): Request[] =>
+  mock.mock.calls.map(([input, init]) => new Request(input, init));
+
 const pageResponse = (
-  data: unknown[],
-  pagination: Record<string, number> = {
-    page: 1,
-    pageSize: 100,
-    pageCount: data.length ? 1 : 0,
-  },
-) => Response.json({ data, meta: { pagination } });
+  data: readonly object[],
+  pagination?: Readonly<Record<string, number>>,
+): Response =>
+  Response.json({
+    data,
+    meta: {
+      pagination: pagination ?? {
+        page: 1,
+        pageSize: 100,
+        pageCount: Number(data.length > 0),
+      },
+    },
+  });
+
+const statusKey = (url: URL): string => url.searchParams.get("status") ?? "";
+const pageKey = (url: URL): string =>
+  url.searchParams.get("pagination[page]") ?? "";
+const pathKey = (url: URL): string => url.pathname;
+
+const stubArticle = (published: readonly object[]): Mock<typeof fetch> =>
+  stubResponses((url) => `${url.pathname} ${statusKey(url)}`, {
+    [`${articlesPath} draft`]: () => pageResponse([]),
+    [`${articlesPath} published`]: () => pageResponse(published),
+  });
 
 const localMedia = {
   id: 90,
@@ -133,10 +197,31 @@ const cdnMedia = {
   ext: ".jpg",
   url: "https://assets.example/card.jpg",
 };
-const document = (documentId: string, published: boolean) => ({
+
+interface ArticleDocument {
+  title: string;
+  id: number;
+  publishedAt: string | null;
+  updatedAt: string;
+  documentId: string;
+  page: { documentId: string; id: number };
+  seo: { id: number; heading: string }[];
+  cover: typeof localMedia;
+  blocks: (
+    | { id: number; __component: "shared.seo"; heading: string }
+    | {
+        id: number;
+        __component: "shared.conditional-link";
+        kind: "internal";
+        attachment: typeof cdnMedia;
+      }
+  )[];
+}
+
+const document = (documentId: string, published: boolean): ArticleDocument => ({
   title: "Article",
   id: published ? 20 : 21,
-  publishedAt: published ? timestamp : null,
+  publishedAt: published ? timestamp : wireNull,
   updatedAt: timestamp,
   documentId,
   page: { documentId: "home", id: 24 },
@@ -153,52 +238,267 @@ const document = (documentId: string, published: boolean) => ({
   ],
 });
 
-const entry = (documentId: string, status: "draft" | "published") => ({
+const entry = (documentId: string, status: PublicationStatus): Entry => ({
   uid: article,
   kind: "collectionType",
   documentId,
   status,
-  locale: null,
+  locale: wireNull,
   file: `api__article.article/${encodeURIComponent(documentId)}.~.${status}.json`,
 });
 
-const models = (spec: OpenApiDocument, uid: string) => {
+const models = (
+  spec: OpenApiDocument,
+  uid: string,
+): Record<string, unknown>[] => {
   const result = Object.values(spec.components.schemas)
     .map((schema) => toRecord(schema["x-strapi-model"]))
     .filter((model) => model["uid"] === uid);
-  assert(result.length, `Missing fixture metadata for ${uid}`);
+  assert.ok(result.length > 0, `Missing fixture metadata for ${uid}`);
   return result;
 };
 
+const exportRequestKey = (url: URL): string =>
+  url.pathname === articlesPath
+    ? `${articlesPath} ${statusKey(url)} ${pageKey(url)}`
+    : url.pathname;
+
+const articlePage = (
+  documentId: string,
+  published: boolean,
+  pagination: Readonly<Record<string, number>>,
+): Response => pageResponse([document(documentId, published)], pagination);
+
+const stubFullExport = (): Mock<typeof fetch> =>
+  stubResponses(exportRequestKey, {
+    [pagesPath]: () => pageResponse([{ id: 24, documentId: "home" }]),
+    // The server caps its page size. Draft supplies pageCount; published supplies only total.
+    [`${articlesPath} draft 1`]: () =>
+      articlePage("z page", false, { page: 1, pageSize: 1, pageCount: 2 }),
+    [`${articlesPath} draft 2`]: () =>
+      articlePage("alpha", false, { page: 2, pageSize: 1, pageCount: 2 }),
+    [`${articlesPath} published 1`]: () =>
+      articlePage("z page", true, { page: 1, pageSize: 1, total: 2 }),
+    [`${articlesPath} published 2`]: () =>
+      articlePage("alpha", true, { page: 2, pageSize: 1, total: 2 }),
+    [localMedia.url]: () => new Response("local file"),
+    [new URL(cdnMedia.url).pathname]: () => new Response("remote file"),
+  });
+
+const articlePopulation = {
+  "populate[page][fields][0]": "documentId",
+  "populate[cover]": "true",
+  "populate[seo]": "true",
+  "populate[link][populate][attachment]": "true",
+  "populate[blocks][on][shared.seo][populate]": "*",
+  "populate[blocks][on][shared.conditional-link][populate][attachment]": "true",
+};
+
+const describeRequest = (request: Request, url: URL): object => {
+  const authorization = request.headers.get("authorization");
+  const { searchParams } = url;
+  const { method } = request;
+  if (url.pathname === articlesPath || url.pathname === pagesPath) {
+    const collection = {
+      method,
+      origin: url.origin,
+      authorization,
+      pageSize: searchParams.get("pagination[pageSize]"),
+      withCount: searchParams.get("pagination[withCount]"),
+    };
+    if (url.pathname === pagesPath) {
+      return {
+        ...collection,
+        hasStatus: searchParams.has("status"),
+        populatesInverseArticles: [...searchParams.keys()].some((key) =>
+          key.startsWith("populate[articles]"),
+        ),
+      };
+    }
+    return {
+      ...collection,
+      selectsTitle: [...searchParams.values()].includes("title"),
+      populate: Object.fromEntries(
+        Object.keys(articlePopulation).map((key) => [
+          key,
+          searchParams.get(key),
+        ]),
+      ),
+    };
+  }
+  return { method, url: url.href, authorization };
+};
+
+const exportRequests = (mock: Mock<typeof fetch>): [string, object][] =>
+  sentRequests(mock)
+    .map((request) => {
+      const url = new URL(request.url);
+      return [exportRequestKey(url), describeRequest(request, url)] satisfies [
+        string,
+        object,
+      ];
+    })
+    .toSorted(([left], [right]) => left.localeCompare(right));
+
+const authenticatedGet = {
+  method: "GET",
+  authorization: `Bearer ${token}`,
+};
+const collectionGet = {
+  ...authenticatedGet,
+  origin: "https://cms.example",
+  pageSize: "100",
+  withCount: "true",
+};
+const articleGet = {
+  ...collectionGet,
+  selectsTitle: false,
+  populate: articlePopulation,
+};
+const expectedExportRequests = [
+  [
+    new URL(cdnMedia.url).pathname,
+    { method: "GET", url: cdnMedia.url, authorization: wireNull },
+  ],
+  [`${articlesPath} draft 1`, articleGet],
+  [`${articlesPath} draft 2`, articleGet],
+  [`${articlesPath} published 1`, articleGet],
+  [`${articlesPath} published 2`, articleGet],
+  [
+    pagesPath,
+    { ...collectionGet, hasStatus: false, populatesInverseArticles: false },
+  ],
+  [
+    localMedia.url,
+    { ...authenticatedGet, url: "https://cms.example/uploads/banner.png" },
+  ],
+] satisfies [string, object][];
+
+const invalidArticle = {
+  id: 1,
+  documentId: "bad",
+  publishedAt: timestamp,
+  title: 42,
+};
+
+const duplicateRow = { id: 1, documentId: "duplicate" };
+const unsafeMediaDiagnostic =
+  "Populated media requires a safe hash, ext and URL";
+
+interface InvalidSpecification {
+  problem: string;
+  change: (specification: OpenApiDocument) => void;
+  diagnostic: string;
+}
+
+const pageGet = (specification: OpenApiDocument): Record<string, unknown> => {
+  const operation = specification.paths["/pages"]?.["get"];
+  assert.ok(operation !== undefined, "Missing fixture GET /pages");
+  return operation;
+};
+
+const invalidSpecifications: readonly InvalidSpecification[] = [
+  {
+    problem: "localized model",
+    change(specification) {
+      toRecord(pageGet(specification)["x-strapi-dump"])["localized"] = true;
+      for (const model of models(specification, pageUid)) {
+        model["localized"] = true;
+      }
+    },
+    diagnostic: `Cannot dump localized model ${pageUid}`,
+  },
+  {
+    problem: "unknown field",
+    change(specification) {
+      for (const model of models(specification, pageUid)) {
+        toRecord(model["fields"])["pluginComponent"] = { kind: "unknown" };
+      }
+    },
+    diagnostic: `Unknown model field ${pageUid}.pluginComponent`,
+  },
+  {
+    problem: "component cycle",
+    change(specification) {
+      for (const model of models(specification, "shared.seo")) {
+        toRecord(model["fields"])["heading"] = {
+          kind: "component",
+          component: "shared.seo",
+          repeatable: false,
+        };
+      }
+    },
+    diagnostic: "Component cycle in dump populate",
+  },
+  {
+    problem: "missing model metadata",
+    change(specification) {
+      for (const schema of Object.values(specification.components.schemas)) {
+        if (toRecord(schema["x-strapi-model"])["uid"] === pageUid) {
+          delete schema["x-strapi-model"];
+        }
+      }
+    },
+    diagnostic: `Missing x-strapi-model metadata for ${pageUid}`,
+  },
+  {
+    problem: "duplicate marker",
+    change(specification) {
+      specification.paths["/extra-pages"] = { get: pageGet(specification) };
+    },
+    diagnostic: `Duplicate x-strapi-dump marker for ${pageUid}`,
+  },
+  {
+    problem: "response UID mismatch",
+    change(specification) {
+      const operation = pageGet(specification);
+      operation["responses"] =
+        specification.paths["/articles"]?.["get"]?.["responses"];
+    },
+    diagnostic: `Inconsistent x-strapi-model identity or flags: expected ${pageUid}`,
+  },
+];
+
 describe("dump", () => {
   const fixture = generatedFixture(customize);
-  let directory: string;
-  let out: string;
+  const temporary = { directory: "" };
 
-  // Each test gets a private spec; keep the genuine response envelopes and all local refs.
-  const options = (...routes: string[]) => {
-    assert(fixture.document);
+  // Keep the real response envelopes and refs, but give each test a private spec.
+  const options = (...routes: string[]): DumpOptions => {
+    assert.ok(
+      fixture.document !== undefined,
+      "Missing generated specification",
+    );
+    assert.ok(temporary.directory !== "", "Missing test output directory");
     const specification = structuredClone(fixture.document);
     specification.paths = Object.fromEntries(
       routes.map((route) => {
         const operations = specification.paths[route];
-        assert(operations, `Missing fixture route ${route}`);
+        assert.ok(operations !== undefined, `Missing fixture route ${route}`);
         return [route, operations];
       }),
     );
-    return { specification, baseUrl, token, out };
+    return {
+      specification,
+      baseUrl,
+      token,
+      out: path.join(temporary.directory, "dump"),
+    };
   };
 
   beforeEach(async () => {
-    directory = await mkdtemp(path.join(os.tmpdir(), "strapi-dump-"));
-    out = path.join(directory, "dump");
+    temporary.directory = await mkdtemp(path.join(os.tmpdir(), "strapi-dump-"));
     stubFetch(() => {
       throw new Error("Unexpected fetch");
     });
   });
+
   afterEach(async () => {
     vi.unstubAllGlobals();
-    await rm(directory, { force: true, recursive: true });
+    if (temporary.directory !== "") {
+      await rm(temporary.directory, { force: true, recursive: true });
+      temporary.directory = "";
+    }
   });
 
   it("exports both publication states and all pages, preserving nested rows and original media references", async () => {
@@ -209,101 +509,36 @@ describe("dump", () => {
       "/health",
       "/pages/{id}/preview",
     );
-    const requests: string[] = [];
-    const downloads: string[] = [];
-    stubFetch((url, request) => {
-      expect(request.method).toBe("GET");
-      if (
-        url.pathname === "/uploads/banner.png" ||
-        url.hostname === "assets.example"
-      ) {
-        const local = url.pathname === "/uploads/banner.png";
-        expect(url.href).toBe(
-          local ? "https://cms.example/uploads/banner.png" : cdnMedia.url,
-        );
-        expect(request.headers.get("authorization")).toBe(
-          local ? `Bearer ${token}` : null,
-        );
-        downloads.push(url.href);
-        return new Response(local ? "local file" : "remote file");
-      }
-      expect(url.origin).toBe("https://cms.example");
-      expect(request.headers.get("authorization")).toBe(`Bearer ${token}`);
-      const q = url.searchParams;
-      expect(q.get("pagination[pageSize]")).toBe("100");
-      expect(q.get("pagination[withCount]")).toBe("true");
-      const page = Number(q.get("pagination[page]"));
-      if (url.pathname === "/install/api/pages") {
-        expect(q.has("status")).toBe(false);
-        expect(
-          [...q.keys()].some((key) => key.startsWith("populate[articles]")),
-        ).toBe(false);
-        requests.push("pages");
-        return pageResponse([{ id: 24, documentId: "home" }]);
-      }
-      expect(url.pathname).toBe("/install/api/articles");
-      expect(q.get("populate[page][fields][0]")).toBe("documentId");
-      expect(q.get("populate[cover]")).toBe("true");
-      expect(q.get("populate[seo]")).toBe("true");
-      expect(q.get("populate[link][populate][attachment]")).toBe("true");
-      expect(q.get("populate[blocks][on][shared.seo][populate]")).toBe("*");
-      expect(
-        q.get(
-          "populate[blocks][on][shared.conditional-link][populate][attachment]",
-        ),
-      ).toBe("true");
-      expect([...q.values()]).not.toContain("title");
-      const status = q.get("status");
-      expect(["draft", "published"]).toContain(status);
-      expect([1, 2]).toContain(page);
-      requests.push(`${status}:${page}`);
-      // The server caps its page size. Draft supplies pageCount; published supplies only total.
-      return pageResponse(
-        [document(page === 1 ? "z page" : "alpha", status === "published")],
-        {
-          page,
-          pageSize: 1,
-          ...(status === "draft" ? { pageCount: 2 } : { total: 2 }),
-        },
-      );
-    });
+    const mock = stubFullExport();
     const manifest = await dump({ ...input, media: true });
-    expect(requests.sort()).toEqual([
-      "draft:1",
-      "draft:2",
-      "pages",
-      "published:1",
-      "published:2",
-    ]);
-    expect(downloads.sort()).toEqual([
-      cdnMedia.url,
-      "https://cms.example/uploads/banner.png",
-    ]);
-    const entries = [
+    expect(exportRequests(mock)).toStrictEqual(expectedExportRequests);
+    const articleEntries = [
       entry("alpha", "draft"),
       entry("alpha", "published"),
       entry("z page", "draft"),
       entry("z page", "published"),
+    ];
+    const entries = [
+      ...articleEntries,
       {
         uid: pageUid,
         kind: "collectionType",
         documentId: "home",
-        locale: null,
+        locale: wireNull,
         status: "published",
         file: "api__page.page/home.~.published.json",
       },
     ];
-    const pkg = parseJsonObject(
-      await readFile(new URL("../package.json", import.meta.url), "utf8"),
-    );
-    expect(manifest).toStrictEqual({
+    const pkg = await readJson(new URL("../package.json", import.meta.url));
+    const specification = JSON.stringify(sorted(input.specification));
+    const { exportedAt, ...metadata } = manifest;
+    expect(metadata).toStrictEqual({
       formatVersion: 1,
       generatorVersion: pkg["version"],
       specificationSha256: createHash("sha256")
-        .update(JSON.stringify(sorted(input.specification)))
+        .update(specification)
         .digest("hex"),
       baseUrl,
-      exportedAt: expect.any(String),
       locales: [],
       entries,
       media: [
@@ -311,112 +546,109 @@ describe("dump", () => {
         { hash: localMedia.hash, file: "media/zzz_local.png" },
       ],
     });
-    expect(new Date(manifest.exportedAt).toISOString()).toBe(
-      manifest.exportedAt,
-    );
-    expect(await readFile(path.join(out, "manifest.json"), "utf8")).toBe(
-      `${JSON.stringify(sorted(manifest), null, 2)}\n`,
-    );
-    for (const item of entries.filter((item) => item.uid === article)) {
-      expect(await readFile(path.join(out, item.file), "utf8")).toBe(
-        `${JSON.stringify(sorted(document(item.documentId, item.status === "published")), null, 2)}\n`,
-      );
-    }
-    expect(await readFile(path.join(out, "media/zzz_local.png"), "utf8")).toBe(
-      "local file",
-    );
-    expect(await readFile(path.join(out, "media/aaa_remote.jpg"), "utf8")).toBe(
-      "remote file",
+    expect(new Date(exportedAt).toISOString()).toBe(exportedAt);
+    const files: [string, string][] = [
+      ["manifest.json", jsonText(manifest)],
+      ...articleEntries.map(
+        ({ documentId, status, file }): [string, string] => {
+          const raw = document(documentId, status === "published");
+          return [file, jsonText(raw)];
+        },
+      ),
+      ["media/zzz_local.png", "local file"],
+      ["media/aaa_remote.jpg", "remote file"],
+    ];
+    const names = files.map(([file]) => file);
+    await expect(readTexts(input.out, names)).resolves.toStrictEqual(
+      files.map(([, contents]) => contents),
     );
   });
 
   it("keeps media metadata without downloading by default, and accepts an existing empty directory", async () => {
+    const input = options("/articles");
+    const { out } = input;
     await mkdir(out);
     const raw = document("news", true);
-    const mock = stubFetch((url) => {
-      expect(url.pathname).toBe("/install/api/articles");
-      return pageResponse(
-        url.searchParams.get("status") === "draft" ? [] : [raw],
-      );
-    });
-    const manifest = await dump(options("/articles"));
+    const mock = stubArticle([raw]);
+    const manifest = await dump(input);
     expect(mock).toHaveBeenCalledTimes(2);
-    expect(manifest.media).toEqual([]);
-    expect(await readdir(out)).not.toContain("media");
-    expect(
-      parseJsonObject(
-        await readFile(path.join(out, entry("news", "published").file), "utf8"),
-      ),
-    ).toStrictEqual(raw);
+    expect(manifest.media).toStrictEqual([]);
+    await expect(readdir(out)).resolves.not.toContain("media");
+    const { file } = entry("news", "published");
+    await expect(readJson(path.join(out, file))).resolves.toStrictEqual(raw);
   });
 
   it("omits a missing singleton draft while preserving the published singleton's real identity", async () => {
     const raw = { id: 5, documentId: "configuration", siteName: "Example" };
-    const statuses: (string | null)[] = [];
-    stubFetch((url) => {
-      expect(url.pathname).toBe("/install/api/site-setting");
-      expect(
-        [...url.searchParams.keys()].some((key) =>
+    const input = options("/site-setting");
+    const mock = stubResponses((url) => `${url.pathname} ${statusKey(url)}`, {
+      "/install/api/site-setting draft": () =>
+        new Response("", { status: 404 }),
+      "/install/api/site-setting published": () =>
+        Response.json({ data: raw, meta: {} }),
+    });
+    const manifest = await dump(input);
+    const queries = sentRequests(mock).map((request) => {
+      const { searchParams } = new URL(request.url);
+      return {
+        status: String(searchParams.get("status")),
+        hasPagination: [...searchParams.keys()].some((key) =>
           key.startsWith("pagination"),
         ),
-      ).toBe(false);
-      const status = url.searchParams.get("status");
-      statuses.push(status);
-      return status === "draft"
-        ? new Response(null, { status: 404 })
-        : Response.json({ data: raw, meta: {} });
+      };
     });
-    const manifest = await dump(options("/site-setting"));
-    expect(statuses.sort()).toEqual(["draft", "published"]);
+    expect(
+      queries.toSorted((left, right) =>
+        left.status.localeCompare(right.status),
+      ),
+    ).toStrictEqual([
+      { status: "draft", hasPagination: false },
+      { status: "published", hasPagination: false },
+    ]);
     const file = "api__site-setting.site-setting/single.~.published.json";
-    expect(manifest.entries).toEqual([
+    expect(manifest.entries).toStrictEqual([
       {
         uid: "api::site-setting.site-setting",
         kind: "singleType",
-        locale: null,
+        locale: wireNull,
         documentId: "configuration",
         status: "published",
         file,
       },
     ]);
-    expect(
-      parseJsonObject(await readFile(path.join(out, file), "utf8")),
-    ).toEqual(raw);
-    expect(await readdir(path.dirname(path.join(out, file)))).toEqual([
+    const exported = path.join(input.out, file);
+    await expect(readJson(exported)).resolves.toStrictEqual(raw);
+    await expect(readdir(path.dirname(exported))).resolves.toStrictEqual([
       "single.~.published.json",
     ]);
   });
 
-  it("validates full envelopes by default and can retain a structurally safe but invalid raw document", async () => {
-    const raw = { id: 1, documentId: "bad", publishedAt: timestamp, title: 42 };
-    stubFetch((url) =>
-      pageResponse(url.searchParams.get("status") === "published" ? [raw] : []),
-    );
+  it("validates full envelopes by default", async () => {
+    stubArticle([invalidArticle]);
     const input = options("/articles");
-    const failed = dump(input);
-    await expect(failed).rejects.toThrow(/articles/);
-    await expect(failed).rejects.toThrow(/published/);
-    await expect(failed).rejects.toThrow(/\/data\/0/);
-    await expect(
-      readFile(path.join(out, "manifest.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    const other = path.join(directory, "unchecked");
-    const manifest = await dump({ ...input, validate: false, out: other });
-    expect(manifest.entries).toEqual([entry("bad", "published")]);
-    expect(
-      parseJsonObject(
-        await readFile(
-          path.join(other, entry("bad", "published").file),
-          "utf8",
-        ),
-      ),
-    ).toEqual(raw);
+    await expect(dump(input)).rejects.toThrow(
+      "GET /install/api/articles (published): validation failed at /data/0",
+    );
+    await expect(readFile(manifestFile(input.out))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("retains a structurally safe but schema-invalid document when validation is disabled", async () => {
+    stubArticle([invalidArticle]);
+    const input = options("/articles");
+    const expected = entry("bad", "published");
+    const manifest = await dump({ ...input, validate: false });
+    expect(manifest.entries).toStrictEqual([expected]);
+    const file = path.join(input.out, expected.file);
+    await expect(readJson(file)).resolves.toStrictEqual(invalidArticle);
   });
 
   it.each([
     [
       "missing documentId",
       { data: [{ id: 33 }], meta: { pagination: { page: 1, pageSize: 100 } } },
+      "expected a document with a nonempty string documentId",
     ],
     [
       "empty documentId",
@@ -424,37 +656,48 @@ describe("dump", () => {
         data: [{ id: 33, documentId: "" }],
         meta: { pagination: { page: 1, pageSize: 100 } },
       },
+      "expected a document with a nonempty string documentId",
     ],
-    ["wrong envelope", { data: {} }],
-  ])("rejects %s even when AJV is disabled", async (_description, envelope) => {
-    stubFetch(() => Response.json(envelope));
-    await expect(
-      dump({ ...options("/articles"), validate: false }),
-    ).rejects.toThrow();
-    await expect(
-      readFile(path.join(out, "manifest.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-  });
+    [
+      "wrong envelope",
+      { data: {} },
+      "expected response envelope with meta object",
+    ],
+  ] as const)(
+    "rejects %s even when AJV is disabled",
+    async (_description, envelope, diagnostic) => {
+      stubFetch(() => Response.json(envelope));
+      const input = options("/articles");
+      await expect(dump({ ...input, validate: false })).rejects.toThrow(
+        diagnostic,
+      );
+      await expect(readFile(manifestFile(input.out))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 
   it("uses a short page to stop only when the server omits counts", async () => {
-    const mock = stubFetch((url) => {
-      const page = Number(url.searchParams.get("pagination[page]"));
-      expect([1, 2]).toContain(page);
-      return pageResponse(page === 1 ? [{ id: 24, documentId: "home" }] : [], {
-        page,
-        pageSize: 1,
-      });
+    const mock = stubResponses(pageKey, {
+      "1": () =>
+        pageResponse([{ id: 24, documentId: "home" }], {
+          page: 1,
+          pageSize: 1,
+        }),
+      "2": () => pageResponse([], { page: 2, pageSize: 1 }),
     });
     const manifest = await dump(options("/pages"));
     expect(mock).toHaveBeenCalledTimes(2);
-    expect(manifest.entries.map((item) => item.documentId)).toEqual(["home"]);
+    expect(manifest.entries.map((item) => item.documentId)).toStrictEqual([
+      "home",
+    ]);
   });
 
   it("uses the marked operation and escaped JSON pointers rather than route or schema names", async () => {
     const input = options("/pages");
     const { specification } = input;
     const route = specification.paths["/pages"];
-    assert(route);
+    assert.ok(route !== undefined, "Missing fixture route /pages");
     specification.paths = { "/archive": route };
     const response = toRecord(toRecord(route["get"]?.["responses"])["200"]);
     const json = toRecord(toRecord(response["content"])["application/json"]);
@@ -462,12 +705,12 @@ describe("dump", () => {
       allOf: [json["schema"]],
     };
     json["schema"] = { $ref: "#/components/schemas/payload~1v1~0fixture" };
-    stubFetch((url) => {
-      expect(url.pathname).toBe("/install/api/archive");
-      return pageResponse([{ id: 24, documentId: "home" }]);
+    stubResponses(pathKey, {
+      "/install/api/archive": () =>
+        pageResponse([{ id: 24, documentId: "home" }]),
     });
     const manifest = await dump(input);
-    expect(manifest.entries.map((item) => item.uid)).toEqual([pageUid]);
+    expect(manifest.entries.map((item) => item.uid)).toStrictEqual([pageUid]);
   });
 
   it("does not wildcard-populate a zone variant whose only nested relation is inverse", async () => {
@@ -480,67 +723,93 @@ describe("dump", () => {
         mappedBy: "seo",
       };
     }
-    const mock = stubFetch((url) => {
-      const keys = [...url.searchParams.entries()].filter(([key]) =>
+    const mock = stubArticle([]);
+    await dump({ ...input, validate: false });
+    const zoneQueries = sentRequests(mock).map((request) => {
+      const { searchParams } = new URL(request.url);
+      return [...searchParams.entries()].filter(([key]) =>
         key.startsWith("populate[blocks][on][shared.seo]"),
       );
-      expect(keys).toEqual([["populate[blocks][on][shared.seo][fields]", "*"]]);
-      return pageResponse([]);
     });
-    await dump({ ...input, validate: false });
-    expect(mock).toHaveBeenCalledTimes(2);
+    expect(zoneQueries).toStrictEqual([
+      [["populate[blocks][on][shared.seo][fields]", "*"]],
+      [["populate[blocks][on][shared.seo][fields]", "*"]],
+    ]);
   });
 
   it.each([
-    "duplicate ID within a page",
-    "repeated page",
-    "inconsistent page number",
-  ])("rejects %s instead of publishing a manifest", async (problem) => {
-    const row = { id: 1, documentId: "duplicate" };
-    const mock = stubFetch((url) => {
-      const page = Number(url.searchParams.get("pagination[page]"));
-      if (page > 2) throw new Error("Unbounded loop");
-      if (problem === "duplicate ID within a page")
-        return pageResponse([row, row]);
-      return pageResponse([row], {
-        page: problem === "repeated page" ? page : 9,
-        pageCount: 2,
-        pageSize: 1,
+    {
+      problem: "duplicate ID within a page",
+      replies: { "1": () => pageResponse([duplicateRow, duplicateRow]) },
+      calls: 1,
+      diagnostic: "duplicate documentId on page 1",
+    },
+    {
+      problem: "repeated page",
+      replies: {
+        "1": () =>
+          pageResponse([duplicateRow], { page: 1, pageCount: 2, pageSize: 1 }),
+        "2": () =>
+          pageResponse([duplicateRow], { page: 2, pageCount: 2, pageSize: 1 }),
+      },
+      calls: 2,
+      diagnostic: "duplicate documentId on page 2",
+    },
+    {
+      problem: "inconsistent page number",
+      replies: {
+        "1": () =>
+          pageResponse([duplicateRow], { page: 9, pageCount: 2, pageSize: 1 }),
+      },
+      calls: 1,
+      diagnostic: "inconsistent pagination size or position on page 1",
+    },
+  ])(
+    "rejects $problem instead of publishing a manifest",
+    async ({ replies, calls, diagnostic }) => {
+      const mock = stubResponses(pageKey, replies);
+      const input = options("/pages");
+      await expect(dump({ ...input, validate: false })).rejects.toThrow(
+        diagnostic,
+      );
+      expect(mock).toHaveBeenCalledTimes(calls);
+      await expect(readFile(manifestFile(input.out))).rejects.toMatchObject({
+        code: "ENOENT",
       });
-    });
-    await expect(
-      dump({ ...options("/pages"), validate: false }),
-    ).rejects.toThrow(/duplicate|repeat|pagination|page number|collision/i);
-    expect(mock.mock.calls.length).toBeLessThanOrEqual(2);
-    await expect(
-      readFile(path.join(out, "manifest.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-  });
+    },
+  );
 
   it("refuses a nonempty destination before fetching or replacing user data", async () => {
+    const input = options("/articles");
+    const { out } = input;
     await mkdir(out);
-    const manifest = path.join(out, "manifest.json");
-    await writeFile(manifest, "existing backup\n");
-    await expect(dump(options("/articles"))).rejects.toThrow();
+    const file = manifestFile(out);
+    await writeFile(file, "existing backup\n");
+    await expect(dump(input)).rejects.toThrow(
+      "Dump output must be a new or empty directory",
+    );
     expect(fetch).not.toHaveBeenCalled();
-    expect(await readFile(manifest, "utf8")).toBe("existing backup\n");
-    expect(await readdir(out)).toEqual(["manifest.json"]);
+    await expect(readFile(file, "utf8")).resolves.toBe("existing backup\n");
+    await expect(readdir(out)).resolves.toStrictEqual(["manifest.json"]);
   });
 
   it("never overwrites a document file created after the dump began", async () => {
+    const input = options("/pages");
+    const { out } = input;
     const file = path.join(out, "api__page.page", "home.~.published.json");
     stubFetch(async () => {
       await mkdir(path.dirname(file), { recursive: true });
       await writeFile(file, "user data", { flag: "wx" });
       return pageResponse([{ id: 1, documentId: "home" }]);
     });
-    await expect(
-      dump({ ...options("/pages"), validate: false }),
-    ).rejects.toThrow();
-    expect(await readFile(file, "utf8")).toBe("user data");
-    await expect(
-      readFile(path.join(out, "manifest.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(dump({ ...input, validate: false })).rejects.toMatchObject({
+      code: "EEXIST",
+      path: file,
+    });
+    await expect(readFile(file, "utf8")).resolves.toBe("user data");
+    await expect(readFile(manifestFile(out))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("keeps traversal-like IDs and their percent-encoded lookalikes in distinct model-local files", async () => {
@@ -553,147 +822,122 @@ describe("dump", () => {
         ids.map((documentId, index) => ({ documentId, id: index + 1 })),
       ),
     );
-    const manifest = await dump({ ...options("/pages"), validate: false });
-    expect(manifest.entries.map((item) => item.documentId).sort()).toEqual(
+    const input = options("/pages");
+    const manifest = await dump({ ...input, validate: false });
+    const { entries } = manifest;
+    expect(entries.map((item) => item.documentId).toSorted()).toStrictEqual(
       ids.toSorted(),
     );
-    expect(new Set(manifest.entries.map((item) => item.file)).size).toBe(
-      ids.length,
+    expect(new Set(entries.map((item) => item.file)).size).toBe(ids.length);
+    expect(entries.map((item) => path.dirname(item.file))).toStrictEqual([
+      "api__page.page",
+      "api__page.page",
+    ]);
+    const rows = await Promise.all(
+      entries.map(({ file }) => readJson(path.join(input.out, file))),
     );
-    for (const item of manifest.entries) {
-      expect(path.dirname(item.file)).toBe("api__page.page");
-      expect(
-        parseJsonObject(await readFile(path.join(out, item.file), "utf8"))[
-          "documentId"
-        ],
-      ).toBe(item.documentId);
-    }
-  });
-
-  it.each([
-    "localized model",
-    "unknown field",
-    "component cycle",
-    "missing model metadata",
-    "duplicate marker",
-    "response UID mismatch",
-  ])("rejects %s before any model is fetched", async (problem) => {
-    const input = options("/articles", "/pages");
-    const paths = input.specification.paths;
-    const operation = paths["/pages"]?.["get"];
-    assert(operation);
-    const marker = toRecord(operation["x-strapi-dump"]);
-    let diagnostic: RegExp;
-    switch (problem) {
-      case "localized model":
-        marker["localized"] = true;
-        for (const model of models(input.specification, pageUid))
-          model["localized"] = true;
-        diagnostic = /localiz|locale/i;
-        break;
-      case "unknown field":
-        for (const model of models(input.specification, pageUid))
-          toRecord(model["fields"])["pluginComponent"] = { kind: "unknown" };
-        diagnostic = /pluginComponent/;
-        break;
-      case "component cycle":
-        for (const model of models(input.specification, "shared.seo"))
-          toRecord(model["fields"])["heading"] = {
-            kind: "component",
-            component: "shared.seo",
-            repeatable: false,
-          };
-        diagnostic = /cycl|recurs/i;
-        break;
-      case "missing model metadata":
-        for (const schema of Object.values(
-          input.specification.components.schemas,
-        )) {
-          if (toRecord(schema["x-strapi-model"])["uid"] === pageUid)
-            delete schema["x-strapi-model"];
-        }
-        diagnostic = /model|metadata/i;
-        break;
-      case "duplicate marker":
-        paths["/extra-pages"] = { get: operation };
-        diagnostic = /duplicate|multiple/i;
-        break;
-      default:
-        operation["responses"] = paths["/articles"]?.["get"]?.["responses"];
-        diagnostic = /model|uid|metadata|match/i;
-    }
-    await expect(dump({ ...input, validate: false })).rejects.toThrow(
-      diagnostic,
+    expect(rows.map((row) => row["documentId"])).toStrictEqual(
+      entries.map((item) => item.documentId),
     );
-    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "https://other.example/api",
-    "//other.example/api",
-    "/safe/../escape",
-  ])("does not send credentials to unsafe spec server %s", async (url) => {
-    const input = options("/pages");
-    input.specification.servers = [{ url }];
-    await expect(dump(input)).rejects.toThrow();
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["/articles", 404],
-    ["/site-setting", 401],
-  ] as const)(
-    "reports a failed GET %s (%d) without leaking the bearer token",
-    async (route, status) => {
-      stubFetch(() => new Response(`rejected: ${token}`, { status }));
-      const failed = dump(options(route));
-      await expect(failed).rejects.toThrow(/GET/);
-      await expect(failed).rejects.toThrow(route);
-      await expect(failed).rejects.toThrow(String(status));
-      await expect(failed).rejects.not.toThrow(token);
-    },
-  );
-
-  it("does not publish a manifest when a media download fails", async () => {
-    stubFetch((url) =>
-      url.pathname === "/uploads/banner.png"
-        ? new Response(null, { status: 403 })
-        : pageResponse([{ documentId: "news", cover: localMedia }]),
+  describe("preflight and fetch failures", () => {
+    it.each(invalidSpecifications)(
+      "rejects $problem before any model is fetched",
+      async ({ change, diagnostic }) => {
+        const input = options("/articles", "/pages");
+        change(input.specification);
+        await expect(dump({ ...input, validate: false })).rejects.toThrow(
+          diagnostic,
+        );
+        expect(fetch).not.toHaveBeenCalled();
+      },
     );
-    await expect(
-      dump({ ...options("/articles"), validate: false, media: true }),
-    ).rejects.toThrow(/403/);
-    await expect(
-      readFile(path.join(out, "manifest.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-  });
 
-  it.each([
-    { ...localMedia, hash: "../outside" },
-    { ...localMedia, ext: ".png/../../outside" },
-    { ...localMedia, ext: "" },
-    { ...localMedia, hash: "" },
-    { ...localMedia, url: "" },
-    { ...localMedia, url: "file:///etc/passwd" },
-  ])(
-    "rejects unsafe or incomplete media without fetching its URL",
-    async (cover) => {
-      const mock = stubFetch(() =>
-        pageResponse([{ documentId: "news", cover }]),
-      );
+    it.each([
+      [
+        "https://other.example/api",
+        "External specification server origin is not allowed",
+      ],
+      ["//other.example/api", "Invalid dump URL path"],
+      ["/safe/../escape", "Invalid dump URL path segment or traversal"],
+    ])(
+      "does not send credentials to unsafe spec server %s",
+      async (url, diagnostic) => {
+        const input = options("/pages");
+        input.specification.servers = [{ url }];
+        await expect(dump(input)).rejects.toThrow(diagnostic);
+        expect(fetch).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ["/articles", 404],
+      ["/site-setting", 401],
+    ] as const)(
+      "reports a failed GET %s (%d) without leaking the bearer token",
+      async (route, status) => {
+        stubFetch(() => new Response(`rejected: ${token}`, { status }));
+        const failed = dump(options(route));
+        await expect(failed).rejects.toThrow(
+          `GET /install/api${route} (draft): HTTP ${status}`,
+        );
+        await expect(failed).rejects.not.toThrow(token);
+      },
+    );
+
+    it("does not publish a manifest when a media download fails", async () => {
+      stubResponses(pathKey, {
+        [localMedia.url]: () => new Response(undefined, { status: 403 }),
+        [articlesPath]: () =>
+          pageResponse([{ documentId: "news", cover: localMedia }]),
+      });
+      const input = options("/articles");
       await expect(
-        dump({ ...options("/articles"), validate: false, media: true }),
-      ).rejects.toThrow();
-      expect(
-        mock.mock.calls.every(
-          ([input, init]) =>
-            new URL(new Request(input, init).url).pathname ===
-            "/install/api/articles",
-        ),
-      ).toBe(true);
-      await expect(
-        readFile(path.join(out, "manifest.json")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+        dump({ ...input, validate: false, media: true }),
+      ).rejects.toThrow("GET media/zzz_local.png: HTTP 403");
+      await expect(readFile(manifestFile(input.out))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+
+    it.each([
+      [
+        "unsafe hash",
+        { ...localMedia, hash: "../outside" },
+        unsafeMediaDiagnostic,
+      ],
+      [
+        "unsafe extension",
+        { ...localMedia, ext: ".png/../../outside" },
+        unsafeMediaDiagnostic,
+      ],
+      ["missing extension", { ...localMedia, ext: "" }, unsafeMediaDiagnostic],
+      ["missing hash", { ...localMedia, hash: "" }, unsafeMediaDiagnostic],
+      ["missing URL", { ...localMedia, url: "" }, unsafeMediaDiagnostic],
+      [
+        "file URL",
+        { ...localMedia, url: "file:///etc/passwd" },
+        "Invalid media URL",
+      ],
+    ] as const)(
+      "rejects a media record with %s without fetching its URL",
+      async (_description, cover, diagnostic) => {
+        const mock = stubResponses(pathKey, {
+          [articlesPath]: () => pageResponse([{ documentId: "news", cover }]),
+        });
+        const input = options("/articles");
+        await expect(
+          dump({ ...input, validate: false, media: true }),
+        ).rejects.toThrow(diagnostic);
+        const paths = sentRequests(mock).map(
+          (request) => new URL(request.url).pathname,
+        );
+        expect(paths).toStrictEqual([articlesPath]);
+        await expect(readFile(manifestFile(input.out))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
+    );
+  });
 });

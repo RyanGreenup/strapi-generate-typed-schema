@@ -1,22 +1,20 @@
 import { createHash } from "node:crypto";
-import {
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { lstat, mkdir, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { OpenApiDocument } from "./document.js";
+import type { MediaFile } from "./dump-media.js";
+import type { DumpTarget } from "./dump-query.js";
 
 import manifest from "../package.json" with { type: "json" };
 import { endpointUrl, fetchDocuments, instanceUrl } from "./dump-fetch.js";
-import { planDump, type ModelMetadata } from "./dump-query.js";
-import { toRecord } from "./json.js";
+import { mediaObjects, saveMedia } from "./dump-media.js";
+import { planDump } from "./dump-query.js";
+import { isUnknownArray, toRecord } from "./json.js";
 
-export interface DumpOptions {
+type JsonRecord = Record<string, unknown>;
+
+interface DumpOptions {
   specification: OpenApiDocument;
   baseUrl: string;
   token: string;
@@ -34,11 +32,7 @@ interface Entry {
   status: Status;
   file: string;
 }
-interface MediaFile {
-  hash: string;
-  file: string;
-}
-export interface DumpManifest {
+interface DumpManifest {
   formatVersion: 1;
   generatorVersion: string;
   specificationSha256: string;
@@ -49,134 +43,117 @@ export interface DumpManifest {
   media: MediaFile[];
 }
 
-const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+interface TargetPath {
+  target: DumpTarget;
+  dir: string;
+  endpoint: URL;
+}
+interface DumpState {
+  options: DumpOptions;
+  input: Pick<DumpOptions, "specification" | "out" | "token">;
+  instance: URL;
+  entries: Entry[];
+  files: Map<string, MediaFile>;
+}
+
+const compare = (a: string, b: string): number => Number(a > b) - Number(a < b);
 const ordered = (_key: string, value: unknown): unknown => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  return Object.fromEntries(
-    Object.entries(toRecord(value)).sort(([a], [b]) => compare(a, b)),
-  );
+  if (value === null || typeof value !== "object" || isUnknownArray(value)) {
+    return value;
+  }
+  const entries = Object.entries(toRecord(value));
+  entries.sort(([a], [b]) => compare(a, b));
+  return Object.fromEntries(entries);
 };
-const writeJson = (file: string, value: unknown) =>
+const writeJson = (file: string, value: unknown): Promise<void> =>
   writeFile(file, `${JSON.stringify(value, ordered, 2)}\n`, { flag: "wx" });
 
 async function prepare(out: string): Promise<void> {
   try {
     await mkdir(out);
   } catch (error) {
-    if (toRecord(error)["code"] !== "EEXIST") throw error;
-    if (!(await lstat(out)).isDirectory() || (await readdir(out)).length) {
-      throw new Error("Dump output must be a new or empty directory");
+    if (toRecord(error)["code"] !== "EEXIST") {
+      throw error;
+    }
+    const stats = await lstat(out);
+    const existing = stats.isDirectory() ? await readdir(out) : undefined;
+    if (existing === undefined || existing.length > 0) {
+      throw new Error("Dump output must be a new or empty directory", {
+        cause: error,
+      });
     }
   }
-  await writeFile(
-    path.join(out, ".partial"),
-    "Incomplete dump: no final manifest.\n",
-    { flag: "wx" },
-  );
+  const message = "Incomplete dump: no final manifest.\n";
+  await writeFile(path.join(out, ".partial"), message, { flag: "wx" });
 }
 
 function directory(uid: string): string {
-  if (!/^api::[\w-]+\.[\w-]+$/u.test(uid))
+  if (!/^api::[\w-]+\.[\w-]+$/u.test(uid)) {
     throw new Error(`Invalid API model UID: ${uid}`);
+  }
   return uid.replace("::", "__");
 }
 
-function* mediaObjects(
-  models: ReadonlyMap<string, ModelMetadata>,
-  uid: string,
-  document: Record<string, unknown>,
-): Generator<Record<string, unknown>> {
-  const model = models.get(uid);
-  if (!model) throw new Error(`Missing media traversal metadata: ${uid}`);
-  for (const [name, field] of Object.entries(model.fields)) {
-    if (!Object.hasOwn(document, name)) continue;
-    const value = document[name];
-    if (
-      value == null ||
-      !["component", "dynamiczone", "media"].includes(field.kind)
-    )
-      continue;
-    const many =
-      field.kind === "dynamiczone" ||
-      (field.kind === "media" && field.multiple) ||
-      (field.kind === "component" && field.repeatable);
-    if (many !== Array.isArray(value))
-      throw new Error(`Invalid populated field ${uid}.${name}`);
-    for (const item of many ? (value as unknown[]) : [value]) {
-      if (!item || typeof item !== "object" || Array.isArray(item))
-        throw new Error(`Invalid populated field ${uid}.${name}`);
-      const object = toRecord(item);
-      if (field.kind === "media") yield object;
-      if (field.kind === "component")
-        yield* mediaObjects(models, field.component, object);
-      if (field.kind === "dynamiczone") {
-        const component = object["__component"];
-        if (
-          typeof component !== "string" ||
-          !field.components.includes(component)
-        )
-          throw new Error(`Invalid dynamic zone variant at ${uid}.${name}`);
-        yield* mediaObjects(models, component, object);
+async function writeStatus(
+  state: DumpState,
+  { target, dir, endpoint }: TargetPath,
+  status: Status,
+): Promise<void> {
+  const { options, input, entries } = state;
+  const documents: { documentId: string; document: JsonRecord }[] = [];
+  for await (const entry of fetchDocuments(
+    input.specification,
+    target,
+    endpoint,
+    input.token,
+    status,
+    options.validate ?? true,
+  )) {
+    documents.push(entry);
+  }
+  documents.sort((a, b) => compare(a.documentId, b.documentId));
+  for (const { documentId, document } of documents) {
+    const stem =
+      target.kind === "singleType"
+        ? "single"
+        : encodeURIComponent(documentId)
+            .replaceAll(".", "%2E")
+            .replaceAll("~", "%7E");
+    const file = `${dir}/${stem}.~.${status}.json`;
+    // oxlint-disable-next-line eslint/no-await-in-loop -- Finish writing each document before processing the next.
+    await writeJson(path.join(input.out, file), document);
+    entries.push({
+      uid: target.uid,
+      kind: target.kind,
+      documentId,
+      // oxlint-disable-next-line unicorn/no-null -- The dump format uses explicit null for unlocalized entries.
+      locale: null,
+      status,
+      file,
+    });
+    if (options.media ?? false) {
+      for (const object of mediaObjects(target.models, target.uid, document)) {
+        // oxlint-disable-next-line eslint/no-await-in-loop -- Complete each media write before deduplicating against it.
+        await saveMedia(object, state);
       }
     }
   }
 }
 
-async function saveMedia(
-  object: Record<string, unknown>,
-  instance: URL,
-  options: DumpOptions,
-  files: Map<string, MediaFile>,
-): Promise<void> {
-  const { hash, ext, url } = object;
-  if (
-    typeof hash !== "string" ||
-    !/^[\w-]+$/u.test(hash) ||
-    typeof ext !== "string" ||
-    !/^\.[a-z\d]+$/iu.test(ext) ||
-    typeof url !== "string" ||
-    !url.trim()
-  ) {
-    throw new Error("Populated media requires a safe hash, ext and URL");
+async function writeTarget(state: DumpState, route: TargetPath): Promise<void> {
+  await mkdir(path.join(state.input.out, route.dir));
+  if (route.target.draftAndPublish) {
+    await writeStatus(state, route, "draft");
   }
-  const address = URL.parse(url, instance.origin);
-  if (
-    !address ||
-    !["http:", "https:"].includes(address.protocol) ||
-    address.username ||
-    address.password
-  )
-    throw new Error("Invalid media URL");
-  const file = `media/${hash}${ext}`;
-  if (files.has(file)) return;
-  if (!files.size) await mkdir(path.join(options.out, "media"));
-  const response = await fetch(address, {
-    headers:
-      address.origin === instance.origin
-        ? { Authorization: `Bearer ${options.token}` }
-        : {},
-    redirect: "manual",
-  }).catch(() => {
-    throw new Error(`GET ${file}: request failed`);
-  });
-  if (!response.ok || !response.body) {
-    await response.body?.cancel();
-    throw new Error(`GET ${file}: HTTP ${response.status}`);
-  }
-  const handle = await open(path.join(options.out, file), "wx");
-  try {
-    await handle.writeFile(response.body);
-  } finally {
-    await handle.close();
-  }
-  files.set(file, { hash, file });
+  await writeStatus(state, route, "published");
 }
 
 /** Export raw REST documents. Only a completed dump has a manifest. */
-export async function dump(options: DumpOptions): Promise<DumpManifest> {
+async function dump(options: DumpOptions): Promise<DumpManifest> {
   const { specification, out, token } = options;
-  if (!/^[\x21-\x7e]+$/u.test(token))
+  if (!/^[\u0021-\u007E]+$/u.test(token)) {
     throw new Error("Dump requires a valid API token");
+  }
   const instance = instanceUrl(options.baseUrl);
   const targets = planDump(specification).map((target) => ({
     target,
@@ -186,54 +163,11 @@ export async function dump(options: DumpOptions): Promise<DumpManifest> {
   await prepare(out);
   const entries: Entry[] = [];
   const files = new Map<string, MediaFile>();
-  for (const { target, dir, endpoint } of targets) {
-    await mkdir(path.join(out, dir));
-    const statuses: Status[] = target.draftAndPublish
-      ? ["draft", "published"]
-      : ["published"];
-    for (const status of statuses) {
-      const documents: {
-        documentId: string;
-        document: Record<string, unknown>;
-      }[] = [];
-      for await (const entry of fetchDocuments(
-        specification,
-        target,
-        endpoint,
-        token,
-        status,
-        options.validate ?? true,
-      )) {
-        documents.push(entry);
-      }
-      documents.sort((a, b) => compare(a.documentId, b.documentId));
-      for (const { documentId, document } of documents) {
-        const stem =
-          target.kind === "singleType"
-            ? "single"
-            : encodeURIComponent(documentId)
-                .replaceAll(".", "%2E")
-                .replaceAll("~", "%7E");
-        const file = `${dir}/${stem}.~.${status}.json`;
-        await writeJson(path.join(out, file), document);
-        entries.push({
-          uid: target.uid,
-          kind: target.kind,
-          documentId,
-          locale: null,
-          status,
-          file,
-        });
-        if (options.media) {
-          for (const object of mediaObjects(
-            target.models,
-            target.uid,
-            document,
-          ))
-            await saveMedia(object, instance, options, files);
-        }
-      }
-    }
+  const input = { specification, out, token };
+  const state = { options, input, instance, entries, files };
+  for (const route of targets) {
+    // oxlint-disable-next-line eslint/no-await-in-loop -- Do not start another target after a failed export.
+    await writeTarget(state, route);
   }
   entries.sort(
     (a, b) =>
@@ -241,6 +175,8 @@ export async function dump(options: DumpOptions): Promise<DumpManifest> {
       compare(a.documentId, b.documentId) ||
       compare(a.status, b.status),
   );
+  const media = [...files.values()];
+  media.sort((a, b) => compare(a.hash, b.hash) || compare(a.file, b.file));
   const result: DumpManifest = {
     formatVersion: 1,
     generatorVersion: manifest.version,
@@ -251,11 +187,12 @@ export async function dump(options: DumpOptions): Promise<DumpManifest> {
     exportedAt: new Date().toISOString(),
     locales: [],
     entries,
-    media: [...files.values()].sort(
-      (a, b) => compare(a.hash, b.hash) || compare(a.file, b.file),
-    ),
+    media,
   };
   await writeJson(path.join(out, "manifest.json"), result);
   await unlink(path.join(out, ".partial"));
   return result;
 }
+
+export { dump };
+export type { DumpManifest, DumpOptions };
