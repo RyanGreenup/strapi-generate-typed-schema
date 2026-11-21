@@ -10,6 +10,7 @@ import {
   readExtensions,
 } from "./conditions.js";
 import { publicSchemas } from "./public-schemas.js";
+import { applyRelations } from "./relations.js";
 import { readEmission } from "./schema-identity.js";
 import {
   renameSchemas,
@@ -44,13 +45,9 @@ const generateSchemas = async (
     );
     const schemas = renameSchemas(emission.schemas, emission.roots);
     const extensions = await readExtensions(input.projectDirectory);
-    warnings.push(
-      ...applyConditions(
-        [...input.contentTypes, ...components, ...extensions],
-        emission.roots,
-        schemas,
-      ),
-    );
+    const models = [...input.contentTypes, ...components, ...extensions];
+    warnings.push(...applyConditions(models, emission.roots, schemas));
+    applyRelations(models, emission.roots, schemas);
     const result = publicSchemas(schemas, emission.roots, input.contentTypes);
     validateSchemaRefs(result);
     const unnamed = unnamedSchemas(result);

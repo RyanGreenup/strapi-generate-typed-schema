@@ -153,6 +153,15 @@ reintroducing nested required, format, or length rules that Strapi skipped.
 Persistence and serialization can still reject or transform values; these
 schemas do not replace running the API.
 
+### Relation metadata
+
+Strapi's generated declarations do not say which side of a relation owns it.
+Each response schema of a model with relations gets an `x-strapi-relations` map,
+keyed by field, with the source `relation`, `target`, `mappedBy`, `inversedBy`,
+and any non-empty `pluginOptions`. Clients can use it to skip inverse relations
+or to read per-field intent, such as a populate depth. Plugin types overridden
+in `src/extensions` are covered too.
+
 ### Limits
 
 - A custom handler gets its path, parameters and security, but no body schemas.
