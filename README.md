@@ -1,66 +1,97 @@
 # Strapi OpenAPI Spec Generator
 
-TypeScript CLI, library, SolidJS web apps, and a Rust-backed OpenTUI example.
+CLI to generate an OpenAPI spec for a Strapi project.
 
-## Packages
+## Overview
 
-- `apps/strapi-openapi-spec-generator/lib` exports `generateSpecification` and
-  its `SpecificationOptions` and `Specification` types. Pass the project
-  directory and optional `serverUrl` and `cacheDirectory` to get the OpenAPI 3.1
-  `document` and a `warnings` array. The library does not write the document.
-- `apps/strapi-openapi-spec-generator/cli` exposes the
-  `strapi-openapi-spec-generator-cli` command and depends on
-  `@ryangreenup/strapi-openapi-spec-generator-lib` via `workspace:*`.
-- `apps/strapi-openapi-spec-generator-rs` is a Cargo workspace with a `lib`
-  crate and a `cli` crate (clap, with shell completions). Its `package.json`
-  wraps `cargo` so the root `build`, `lint`, `check-types`, `test`, `format` and
-  `fix` tasks include it.
-- `packages/oxlint-config` provides shared oxlint and oxfmt config consumed by
-  both packages. Its `generate-artifacts` task writes the recommended-rule JSON
-  under `src/generated/`, which is gitignored; `build`, `lint`, `test` and
-  `check-types` depend on that task.
-- `packages/typescript_config` provides shared strict TypeScript presets. See
-  its README for Node, CommonJS, Next.js, Solid/Vite, and Strapi usage.
+The Strapi OpenAPI generator is quite limited and inaccurate as it relies on Zod
+schemas independent of the actual types. This uses Typia to infer the types and
+emit them as an OpenAPI specification which is much more detailed.
 
-## Generate a specification
+## When To Use This
 
-```sh
-strapi-openapi-spec-generator-cli generate path/to/strapi-project
-```
+If you want really narrow types so you can stop guessing in your frontend.
 
-This writes `specification.json` into the project. `--output` chooses another
-file, `--server-url` sets the REST prefix (default `/api`), and `--cache-dir`
-moves the cache (default `~/.cache/strapi-openapi-spec-generator`).
+Close the tab if:
 
-The project is only read: Strapi is not started and no database is needed. It
-must have its dependencies installed and its generated types
-(`strapi ts:generate-types` writes `types/generated/`).
+1. You're not using GraphQL
+   - GraphQL gives you types for free, so you don't want this.
+   - However, the query complexity and database load using the GraphQL plugin
+     means this is not an option.
+2. You're happy with [Strapi Typed Client] [^@e4623bb]  
+   TypeScript CLI, library, SolidJS web apps, and a Rust-backed OpenTUI example.
+3. The amount of LLM generated code bothers you
+   - In my defense
+     - Nobody wants to type Strapi's API, not even the Strapi maintainers
+     - It emits an OpenAPI spec, so the code itself not exactly _load bearing_.
 
-How it works:
+[^@e4623bb]:
+    Strapi. (n.d.). Retrieved November 21, 2026, from
+    https://community.strapi.io/marketplace/strapi-typed-client
+
+[Strapi Typed Client]:
+  https://community.strapi.io/marketplace/strapi-typed-client
+
+## Usage
+
+To write the OpenAPI spec `specification.json` into the project generate the
+strapi types and call the CLI:
+
+> [!NOTE]
+> This is read-only, it uses the types from the Strapi project.
+>
+> Strapi is not started, no database is required.
+
+1. Build the Strapi types:
+
+   ```sh
+   pnpm install
+   pnpm build
+   pnpm strapi ts:generate-types
+   ```
+
+2. Run the command to generate the spec:
+
+   ```sh
+   strapi-openapi-spec-generator-cli generate path/to/strapi-project
+   ```
+
+The CLI has some configuration:
+
+- `--output`
+  - chooses another file
+- `--server-url`
+  - Sets the REST prefix (default `/api`)
+- `--cache-dir`
+  - Moves the cache (default `~/.cache/strapi-openapi-spec-generator`).
+
+## How it works
 
 1. Content types come from `src/api/*/content-types/*/schema.json`.
-2. Routes come from `src/api/*/routes/*`, read as source text without running
-   it: `createCoreRouter` calls (with `only`, `except`, `prefix` and
-   `config.<action>.auth`) and custom `{ routes: [...] }` objects. A route that
-   is not written as literals is skipped with a warning.
+2. Routes come from `src/api/*/routes/*`
 3. Request and response schemas come from the types in
    `lib/templates/rest-types.ts`. The library copies that file and a generated
    entry file into a work directory in the cache, and [typia](https://typia.io)
-   turns the types into JSON Schema under `ttsx`. The first run on a machine
-   compiles the typia plugin, which takes a few minutes; later runs take
-   seconds.
-4. Source content-type and component JSON supplies `conditions.visible`, which
-   Strapi's generated declarations omit. A postprocessing pass applies those
-   rules to the generated request and response schemas. Plugin content types
-   that the project overrides in `src/extensions/<plugin>/content-types/` are
-   read too, so an edited users-permissions user keeps its rules.
+   turns the types into JSON Schema under `ttsx`.
 
-Schema names come from model UIDs and their roles (for example, published
-response or draft update), not from parsing typia's component names. No
-per-project naming table is required. Generation fails on ambiguous public names
-or unresolved local schema references rather than writing a broken spec. If a
-schema reaches the document without a model role to name it, it keeps typia's
-generated name and the result includes a warning.
+   The first run on a machine compiles the typia plugin, which takes a few
+   minutes, subsequent runs are only a few seconds.
+
+4. Source content-type and component JSON supplies `conditions.visible`, which
+   Strapi's generated declarations do not provide. A second postprocessing pass
+   applies those rules to the generated request / response schemas.
+
+   Modified `users-permissions` are expressed in the schema as plugin content
+   modified in `src/extensions/<plugin>/content-types/` are read too.
+
+Schema names come from model UIDs and their roles (e.g. published response /
+draft update), they're not inferred from Typia's component names. A per-project
+naming table is not required.
+
+Generation fails on ambiguous public names or unresolved local schema references
+it shouldn't write a broken spec. If a schema reaches the document without a
+model role for its name, it will fall back to typia's generated name and the
+result has a warning.
 
 ### Response constraints
 
