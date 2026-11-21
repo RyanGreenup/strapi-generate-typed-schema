@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll } from "vitest";
 
-import type { JsonSchema, OpenApiDocument } from "../src/index.js";
+import type { JsonSchema, OpenApiDocument } from "../src/document.js";
 
 import { generateSpecification } from "../src/index.js";
 

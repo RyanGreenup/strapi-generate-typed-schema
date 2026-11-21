@@ -1,168 +1,146 @@
+import type { ConditionContext } from "./condition-predicates.js";
 import type { JsonSchema } from "./document.js";
 
-import { parseJsonObject, toRecord } from "./json.js";
+import { isUnknownArray, parseJsonObject, toRecord } from "./json.js";
 import { pascalCase } from "./names.js";
 
-/**
- * The generic types of templates/rest-types.ts, and the suffix that replaces each one in a
- * schema name. `RestAnyDocument<"api::page.page">` becomes "ApiPagePageDocument".
- */
-const SUFFIXES: Record<string, string> = {
-  PublishedExistingComponentInput: "PublishedExistingEntryInput",
-  PublishedNewComponentInput: "PublishedNewEntryInput",
-  PublishedExistingZoneInput: "PublishedExistingBlockInput",
-  PublishedNewZoneInput: "PublishedNewBlockInput",
-  DraftCreateComponentInput: "DraftCreateEntryInput",
-  PublishedCreateComponentInput: "PublishedCreateEntryInput",
-  DraftCreateZoneInput: "DraftCreateBlockInput",
-  PublishedCreateZoneInput: "PublishedCreateBlockInput",
-  DraftUpdateZoneInput: "DraftUpdateBlockInput",
-  PublishedUpdateZoneInput: "PublishedUpdateBlockInput",
-  DraftComponentInput: "DraftEntryInput",
-  PublishedComponentInput: "PublishedEntryInput",
-  RestDraftCreateInput: "DraftCreateInput",
-  RestPublishedCreateInput: "PublishedCreateInput",
-  RestDraftUpdateInput: "DraftUpdateInput",
-  RestPublishedUpdateInput: "PublishedUpdateInput",
-  RestDraftCreateBody: "DraftCreateRequest",
-  RestPublishedCreateBody: "PublishedCreateRequest",
-  RestDraftUpdateBody: "DraftUpdateRequest",
-  RestPublishedUpdateBody: "PublishedUpdateRequest",
-  RestAnyDocument: "Document",
-  RestDraftDocument: "DraftDocument",
-  RestDraftZoneEntry: "DraftBlock",
-  RestPublishedDocument: "PublishedDocument",
-  RestPublishedZoneEntry: "PublishedBlock",
-  RestCreateInput: "CreateInput",
-  RestUpdateInput: "UpdateInput",
-};
+type Mode = ConditionContext["mode"];
 
-/** typia ends the name of a generic type with a hash of its arguments. */
+// Request envelopes are renamed too, but conditions apply only to model fields.
+const VARIANTS: [generic: string, suffix: string, mode: Mode | undefined][] = [
+  ["PublishedExistingComponentInput", "PublishedExistingEntryInput", "update"],
+  ["PublishedNewComponentInput", "PublishedNewEntryInput", "create"],
+  ["PublishedExistingZoneInput", "PublishedExistingBlockInput", "update"],
+  ["PublishedNewZoneInput", "PublishedNewBlockInput", "create"],
+  ["DraftCreateComponentInput", "DraftCreateEntryInput", "create"],
+  ["PublishedCreateComponentInput", "PublishedCreateEntryInput", "create"],
+  ["DraftCreateZoneInput", "DraftCreateBlockInput", "create"],
+  ["PublishedCreateZoneInput", "PublishedCreateBlockInput", "create"],
+  ["DraftUpdateZoneInput", "DraftUpdateBlockInput", "update"],
+  ["PublishedUpdateZoneInput", "PublishedUpdateBlockInput", "update"],
+  ["DraftComponentInput", "DraftEntryInput", "update"],
+  ["PublishedComponentInput", "PublishedEntryInput", "create"],
+  ["RestDraftCreateInput", "DraftCreateInput", "create"],
+  ["RestPublishedCreateInput", "PublishedCreateInput", "create"],
+  ["RestDraftUpdateInput", "DraftUpdateInput", "update"],
+  ["RestPublishedUpdateInput", "PublishedUpdateInput", "update"],
+  ["RestDraftCreateBody", "DraftCreateRequest", undefined],
+  ["RestPublishedCreateBody", "PublishedCreateRequest", undefined],
+  ["RestDraftUpdateBody", "DraftUpdateRequest", undefined],
+  ["RestPublishedUpdateBody", "PublishedUpdateRequest", undefined],
+  ["RestAnyDocument", "Document", "response"],
+  ["RestDraftDocument", "DraftDocument", "response"],
+  ["RestDraftZoneEntry", "DraftBlock", "response"],
+  ["RestPublishedDocument", "PublishedDocument", "response"],
+  ["RestPublishedZoneEntry", "PublishedBlock", "response"],
+  ["RestCreateInput", "CreateInput", "create"],
+  ["RestUpdateInput", "UpdateInput", "update"],
+];
+
+const CONDITION_MODES: ReadonlyMap<string, Mode | undefined> = new Map(
+  VARIANTS.map(([, suffix, mode]) => [suffix, mode]),
+);
+
 const HASH = /-x[0-9A-F]{16}$/u;
-
-/** typia writes a character that a schema name cannot hold as its code, for example "_x3A_". */
 const ESCAPED_CHARACTER = /_x(?<code>[0-9A-F]{2})_/gu;
-
 const HEXADECIMAL = 16;
 
-/**
- * Give one generated schema a readable name.
- *
- * typia names a generic type after its arguments, for example
- * "RestAnyDocumentapi_x3A__x3A_page_x2E_page-x7AB9B112138960C0".
- *
- * @param name - The name typia generated.
- * @returns The name Strapi uses for the UID plus a suffix, or `name` when it is not generic.
- */
 const readableSchemaName = (name: string): string => {
-  const alias = Object.keys(SUFFIXES).find((key) => name.startsWith(key));
-  if (alias === undefined || !HASH.test(name)) {
+  if (!HASH.test(name)) {
+    return name;
+  }
+  const alias = VARIANTS.find(([generic]) => name.startsWith(generic));
+  if (alias === undefined) {
     return name;
   }
   const uid = name
-    .slice(alias.length)
+    .slice(alias[0].length)
     .replace(HASH, "")
     .replaceAll(ESCAPED_CHARACTER, (_match, code: string) =>
       String.fromCodePoint(Number.parseInt(code, HEXADECIMAL)),
     );
 
-  return `${pascalCase(uid)}${SUFFIXES[alias] ?? ""}`;
+  return `${pascalCase(uid)}${alias[1]}`;
 };
 
 const documentUnion = (
   schema: JsonSchema,
-  document: string,
+  documents: Map<string, string>,
   root: string,
-): JsonSchema => {
-  const variants = schema["oneOf"] ?? schema["anyOf"];
-  const alternatives: unknown[] = Array.isArray(variants) ? variants : [];
-  if (alternatives.length > 2) {
-    return {
-      ...schema,
-      [schema["oneOf"] === undefined ? "anyOf" : "oneOf"]: [
-        ...alternatives.filter(
-          (entry) => toRecord(entry)["$ref"] === undefined,
-        ),
-        { $ref: `#/components/schemas/${document}` },
-      ],
-    };
+): JsonSchema | undefined => {
+  const alternatives = schema["oneOf"] ?? schema["anyOf"];
+  if (!isUnknownArray(alternatives)) {
+    return undefined;
   }
-  return root === document
-    ? { anyOf: variants }
-    : { $ref: `#/components/schemas/${document}` };
+  const references = alternatives
+    .map((entry) => toRecord(entry)["$ref"])
+    .filter((reference) => typeof reference === "string");
+  const document = documents.get(references.toSorted().join("\n"));
+  if (document === undefined) {
+    return undefined;
+  }
+  const ref = { $ref: `#/components/schemas/${document}` };
+  if (alternatives.length <= 2) {
+    return root === document ? { anyOf: alternatives } : ref;
+  }
+  // Preserve non-state alternatives, such as a nullable relation.
+  return {
+    ...schema,
+    [schema["oneOf"] === undefined ? "anyOf" : "oneOf"]: [
+      ...alternatives.filter((entry) => toRecord(entry)["$ref"] === undefined),
+      ref,
+    ],
+  };
 };
 
-/**
- * Preserve named document unions and make only publication-state unions non-exclusive.
- * `fields` can omit publishedAt, so a valid entry can match both state schemas.
- */
+// Fields can omit publishedAt, so projected documents can match both state schemas.
 const responseUnions = (
-  schemas: Record<string, JsonSchema>,
+  schemas: Record<string, unknown>,
 ): Record<string, JsonSchema> => {
   const documents = new Map<string, string>();
   for (const name of Object.keys(schemas)) {
     if (name.endsWith("PublishedDocument")) {
       const prefix = name.slice(0, -"PublishedDocument".length);
       const document = `${prefix}Document`;
+      const draftName = `${prefix}DraftDocument`;
       const published = `#/components/schemas/${name}`;
-      const draft = `#/components/schemas/${prefix}DraftDocument`;
-      if (`${prefix}DraftDocument` in schemas) {
-        const variants = [{ $ref: published }, { $ref: draft }];
+      if (draftName in schemas) {
+        const draft = `#/components/schemas/${draftName}`;
         documents.set([published, draft].toSorted().join("\n"), document);
-        schemas[document] = { anyOf: variants };
+        schemas[document] = { anyOf: [{ $ref: published }, { $ref: draft }] };
       } else {
         schemas[document] ??= { $ref: published };
       }
     }
   }
 
-  const unionDocument = (variants: unknown): string | undefined => {
-    if (!Array.isArray(variants)) {
-      return undefined;
-    }
-    const references = variants
-      .map((entry: unknown) => toRecord(entry)["$ref"])
-      .filter(
-        (reference): reference is string => typeof reference === "string",
-      );
-    return documents.get(references.toSorted().join("\n"));
-  };
-
-  const visit = (value: unknown, root: string): unknown => {
-    if (Array.isArray(value)) {
-      return value.map((entry: unknown) => visit(entry, ""));
+  const visit = (value: unknown, root = ""): unknown => {
+    if (isUnknownArray(value)) {
+      return value.map((entry) => visit(entry));
     }
     if (value === null || typeof value !== "object") {
       return value;
     }
     const schema = toRecord(value);
-    const variants = schema["oneOf"] ?? schema["anyOf"];
-    const document = unionDocument(variants);
-    if (document !== undefined) {
-      return documentUnion(schema, document, root);
-    }
-    return Object.fromEntries(
-      Object.entries(schema).map(([key, entry]) => [key, visit(entry, "")]),
+    return (
+      documentUnion(schema, documents, root) ??
+      Object.fromEntries(
+        Object.entries(schema).map(([key, entry]) => [key, visit(entry)]),
+      )
     );
   };
 
   return Object.fromEntries(
     Object.entries(schemas).map(([name, schema]) => [
       name,
-      toRecord(visit(schema, name)),
+      schema === false ? { not: {} } : toRecord(visit(schema, name)),
     ]),
   );
 };
 
-/**
- * Give every generated schema a readable name, and update the references to it.
- *
- * @param schemas - The component schemas that typia generated.
- * @returns The same schemas under readable names.
- * @throws {Error} When two schemas would get the same name.
- */
+/** Rename typia's schemas and references together, rejecting ambiguous public names. */
 const renameSchemas = (
-  schemas: Record<string, JsonSchema>,
+  schemas: Record<string, unknown>,
 ): Record<string, JsonSchema> => {
   // A name appears as a key and inside each "$ref" to it, so rename in the JSON text.
   let text = JSON.stringify(schemas);
@@ -180,14 +158,7 @@ const renameSchemas = (
       text = text.replaceAll(name, readable);
     }
   }
-  const renamed = Object.fromEntries(
-    Object.entries(parseJsonObject(text)).map(([name, schema]) => [
-      name,
-      toRecord(schema),
-    ]),
-  );
-
-  return responseUnions(renamed);
+  return responseUnions(parseJsonObject(text));
 };
 
-export { readableSchemaName, renameSchemas };
+export { CONDITION_MODES, renameSchemas };

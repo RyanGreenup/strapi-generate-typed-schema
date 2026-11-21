@@ -8,107 +8,81 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import type { ContentType } from "./content-types.js";
 
 import { ERROR_SCHEMA, pascalCase, schemaNames } from "./names.js";
 
-/** Everything `generateSchemas` needs. */
 interface SchemasInput {
-  /** Directory for the compiled typia plugin and the work directories. */
   cacheDirectory: string;
   contentTypes: ContentType[];
-  /** The root directory of the Strapi project. */
   projectDirectory: string;
 }
 
-const TYPES_TEMPLATE = fileURLToPath(
-  new URL("../templates/rest-types.ts", import.meta.url),
-);
-
-/**
- * Write the TypeScript file that typia compiles into the component schemas.
- *
- * Each alias name becomes a schema name, and `RestError` keeps the name it has in the
- * template. The file prints the schemas as one line of JSON.
- *
- * @param contentTypes - The content types to generate schemas for.
- * @returns The source text of the entry file.
- */
 const entrySource = (contentTypes: ContentType[]): string => {
-  const aliases = contentTypes.flatMap((contentType) => {
-    const names = schemaNames(contentType.uid);
-    const uid = JSON.stringify(contentType.uid);
-    const name = pascalCase(contentType.uid);
-    const shared = [
-      `type ${name}Document = RestAnyDocument<${uid}>;`,
-      `type ${names.one} = RestAnyFindOne<${uid}>;`,
-      `type ${names.update} = RestUpdateBody<${uid}>;`,
-      `type ${name}PublishedUpdateRequest = RestPublishedUpdateBody<${uid}>;`,
-      ...(contentType.draftAndPublish
-        ? [`type ${name}DraftUpdateRequest = RestDraftUpdateBody<${uid}>;`]
-        : []),
+  const aliases = contentTypes.flatMap(({ uid, kind, draftAndPublish }) => {
+    const names = schemaNames(uid);
+    const prefix = pascalCase(uid);
+    const argument = JSON.stringify(uid);
+    const alias = (name: string, generic: string): [string, string] => [
+      name,
+      `type ${name} = ${generic}<${argument}>;`,
     ];
-
-    // A single type has no list route and no create route.
-    return contentType.kind === "singleType"
-      ? shared
-      : [
-          ...shared,
-          `type ${names.list} = RestAnyFind<${uid}>;`,
-          `type ${names.create} = RestCreateBody<${uid}>;`,
-          `type ${name}PublishedCreateRequest = RestPublishedCreateBody<${uid}>;`,
-          ...(contentType.draftAndPublish
-            ? [`type ${name}DraftCreateRequest = RestDraftCreateBody<${uid}>;`]
-            : []),
-        ];
+    const types = [
+      alias(`${prefix}Document`, "RestAnyDocument"),
+      alias(names.one, "RestAnyFindOne"),
+      alias(names.update, "RestUpdateBody"),
+      alias(`${prefix}PublishedUpdateRequest`, "RestPublishedUpdateBody"),
+    ];
+    if (draftAndPublish) {
+      types.push(alias(`${prefix}DraftUpdateRequest`, "RestDraftUpdateBody"));
+    }
+    if (kind !== "singleType") {
+      types.push(
+        alias(names.list, "RestAnyFind"),
+        alias(names.create, "RestCreateBody"),
+        alias(`${prefix}PublishedCreateRequest`, "RestPublishedCreateBody"),
+      );
+      if (draftAndPublish) {
+        types.push(alias(`${prefix}DraftCreateRequest`, "RestDraftCreateBody"));
+      }
+    }
+    return types;
   });
-  const aliasNames = aliases.map((alias) => alias.split(" ")[1] ?? "");
-
-  return [
-    'import typia from "typia";',
-    'import type { RestAnyDocument, RestAnyFind, RestAnyFindOne, RestCreateBody, RestDraftCreateBody, RestDraftUpdateBody, RestPublishedCreateBody, RestPublishedUpdateBody, RestError, RestUpdateBody } from "./rest-types.ts";',
-    "// Declared here so that the file needs no Node.js type package.",
-    "declare const process: { stdout: { write(text: string): void } };",
-    ...aliases,
-    `const generated = typia.json.schemas<[${[...aliasNames, ERROR_SCHEMA].join(", ")}], "3.1">();`,
-    "const schemas = generated.components.schemas ?? {};",
-    `const names = ${JSON.stringify([...aliasNames, ERROR_SCHEMA])};`,
-    "// Keep public aliases when typia emits a union inline; referenced state objects are renamed.",
-    "for (const [index, name] of names.entries()) {",
-    "  const schema = generated.schemas[index]!;",
-    '  if (!("$ref" in schema)) schemas[name] ??= schema;',
-    "}",
-    String.raw`process.stdout.write("\n" + JSON.stringify(schemas) + "\n");`,
-    "",
-  ].join("\n");
+  const names = [...aliases.map(([name]) => name), ERROR_SCHEMA];
+  return String.raw`import typia from "typia";
+import type { RestAnyDocument, RestAnyFind, RestAnyFindOne, RestCreateBody, RestDraftCreateBody, RestDraftUpdateBody, RestPublishedCreateBody, RestPublishedUpdateBody, RestError, RestUpdateBody } from "./rest-types.ts";
+// Declared here so that the file needs no Node.js type package.
+declare const process: { stdout: { write(text: string): void } };
+${aliases.map(([, declaration]) => declaration).join("\n")}
+const generated = typia.json.schemas<[${names.join(", ")}], "3.1">();
+const schemas = generated.components.schemas ?? {};
+const names = ${JSON.stringify(names)};
+// Keep public aliases when typia emits a union inline; referenced state objects are renamed.
+for (const [index, name] of names.entries()) {
+  const schema = generated.schemas[index]!;
+  if (!("$ref" in schema)) schemas[name] ??= schema;
+}
+process.stdout.write("\n" + JSON.stringify(schemas) + "\n");
+`;
 };
 
-/**
- * Find the directory of an installed package.
- *
- * @param name - The package name.
- * @param from - A file inside the package that depends on `name`.
- * @returns The directory that holds the package's package.json.
- */
-const packageDirectory = (name: string, from: string): string =>
-  path.dirname(createRequire(from).resolve(`${name}/package.json`));
+/** Resolve dependencies relative to the generator or the consuming Strapi project. */
+const packageDirectory = (
+  name: string,
+  from: string = import.meta.url,
+): string => path.dirname(createRequire(from).resolve(`${name}/package.json`));
 
-/**
- * Check that the project has what the schemas are generated from.
- *
- * @param projectDirectory - The root directory of the Strapi project.
- * @returns The directory of the project's `@strapi/strapi` package.
- * @throws {Error} When the generated types or the Strapi package are missing.
- */
 const checkProject = async (projectDirectory: string): Promise<string> => {
-  const types = path.join(projectDirectory, "types", "generated");
+  const types = path.join(
+    projectDirectory,
+    "types/generated/contentTypes.d.ts",
+  );
   try {
-    await access(path.join(types, "contentTypes.d.ts"));
+    await access(types);
   } catch {
     throw new Error(
-      `${types}/contentTypes.d.ts does not exist. Run "strapi ts:generate-types" in the project first.`,
+      `${types} does not exist. Run "strapi ts:generate-types" in the project first.`,
     );
   }
   try {
@@ -124,29 +98,19 @@ const checkProject = async (projectDirectory: string): Promise<string> => {
 };
 
 /**
- * Create the directory that the entry file is compiled in.
- *
- * The directory links to three packages, so that the entry file resolves `typia` and the
- * native TypeScript compiler from this library, and `@strapi/strapi` from the project.
- * The project itself is only read.
- *
- * @param input - The project, its content types and the cache directory.
- * @returns The work directory.
+ * Stage the compiler beside its dependencies without changing the Strapi project.
+ * @param input - Project, content types and writable compiler cache.
+ * @returns A temporary directory that the caller must remove.
+ * @throws If dependencies, generated declarations or cache access are missing.
  */
 const createWorkDirectory = async (input: SchemasInput): Promise<string> => {
-  const strapi = await checkProject(input.projectDirectory);
-  const parent = path.join(input.cacheDirectory, "work");
+  const { projectDirectory, cacheDirectory, contentTypes } = input;
+  const strapi = await checkProject(projectDirectory);
+  const parent = path.join(cacheDirectory, "work");
   await mkdir(parent, { recursive: true });
   const work = await mkdtemp(path.join(parent, "run-"));
   const modules = path.join(work, "node_modules");
   await mkdir(path.join(modules, "@strapi"), { recursive: true });
-  const self = import.meta.url;
-  const generatedTypes = path.join(
-    input.projectDirectory,
-    "types",
-    "generated",
-    "*.d.ts",
-  );
   const tsconfig = {
     compilerOptions: {
       module: "NodeNext",
@@ -156,7 +120,10 @@ const createWorkDirectory = async (input: SchemasInput): Promise<string> => {
       target: "ES2024",
       types: [],
     },
-    include: ["./entry.ts", generatedTypes],
+    include: [
+      "./entry.ts",
+      path.join(projectDirectory, "types/generated/*.d.ts"),
+    ],
   };
   // ttsc finds the typia plugin and the compiler through this manifest.
   const manifest = {
@@ -165,14 +132,17 @@ const createWorkDirectory = async (input: SchemasInput): Promise<string> => {
     type: "module",
   };
   await Promise.all([
-    symlink(packageDirectory("typia", self), path.join(modules, "typia")),
+    symlink(packageDirectory("typia"), path.join(modules, "typia")),
     symlink(
-      packageDirectory("@typescript/native", self),
+      packageDirectory("@typescript/native"),
       path.join(modules, "typescript"),
     ),
     symlink(strapi, path.join(modules, "@strapi", "strapi")),
-    copyFile(TYPES_TEMPLATE, path.join(work, "rest-types.ts")),
-    writeFile(path.join(work, "entry.ts"), entrySource(input.contentTypes)),
+    copyFile(
+      new URL("../templates/rest-types.ts", import.meta.url),
+      path.join(work, "rest-types.ts"),
+    ),
+    writeFile(path.join(work, "entry.ts"), entrySource(contentTypes)),
     writeFile(path.join(work, "tsconfig.json"), JSON.stringify(tsconfig)),
     writeFile(path.join(work, "package.json"), JSON.stringify(manifest)),
   ]);
@@ -180,5 +150,5 @@ const createWorkDirectory = async (input: SchemasInput): Promise<string> => {
   return work;
 };
 
-export { createWorkDirectory, entrySource, packageDirectory };
+export { createWorkDirectory, packageDirectory };
 export type { SchemasInput };

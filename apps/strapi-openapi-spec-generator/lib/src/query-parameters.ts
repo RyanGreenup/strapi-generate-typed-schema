@@ -1,7 +1,6 @@
 /** One OpenAPI parameter object. */
 type Parameter = Record<string, unknown>;
 
-/** The names of the query parameters that the core routes accept. */
 type QueryName =
   | "fields"
   | "filters"
@@ -16,6 +15,7 @@ type QueryName =
 
 const deepObject = { explode: true, style: "deepObject" };
 const stringSchema = { type: "string" };
+const stringParameter = { schema: stringSchema };
 const stringList = { items: stringSchema, type: "array" };
 const booleanParameter = {
   anyOf: [{ type: "boolean" }, { enum: ["true", "false"], type: "string" }],
@@ -33,65 +33,50 @@ const sortObject = {
   type: "object",
 };
 
-/**
- * The query parameters of the core routes. They are written by hand because they are not
- * part of any request or response body type.
- */
+const query = (
+  name: string,
+  description: string,
+  options: Parameter = stringParameter,
+): Parameter => ({ description, in: "query", name, ...options });
+
+/** Query descriptors for Strapi's core REST actions. */
 const QUERY_PARAMETERS: Record<QueryName, Parameter> = {
-  fields: {
-    description: "Scalar fields to return",
-    in: "query",
-    name: "fields",
+  fields: query("fields", "Scalar fields to return", {
     schema: { anyOf: [stringSchema, stringList] },
-  },
-  filters: {
-    description: "Attribute filters and $and / $or / $not",
-    in: "query",
-    name: "filters",
+  }),
+  filters: query("filters", "Attribute filters and $and / $or / $not", {
     ...deepObject,
     schema: { type: "object" },
-  },
+  }),
   hasPublishedVersion: {
     deprecated: true,
-    description: "Deprecated: use publicationFilter",
-    in: "query",
-    name: "hasPublishedVersion",
-    schema: booleanParameter,
+    ...query("hasPublishedVersion", "Deprecated: use publicationFilter", {
+      schema: booleanParameter,
+    }),
   },
-  locale: {
-    description: "Locale code",
-    in: "query",
-    name: "locale",
-    schema: stringSchema,
-  },
-  pagination: {
-    description:
-      "Page-based (page, pageSize) or offset-based (start, limit) pagination, not both",
-    in: "query",
-    name: "pagination",
-    ...deepObject,
-    schema: {
-      properties: {
-        limit: { type: "integer" },
-        page: { exclusiveMinimum: 0, type: "integer" },
-        pageSize: { exclusiveMinimum: 0, type: "integer" },
-        start: { minimum: 0, type: "integer" },
-        withCount: booleanParameter,
+  locale: query("locale", "Locale code"),
+  pagination: query(
+    "pagination",
+    "Page-based (page, pageSize) or offset-based (start, limit) pagination, not both",
+    {
+      ...deepObject,
+      schema: {
+        properties: {
+          limit: { type: "integer" },
+          page: { exclusiveMinimum: 0, type: "integer" },
+          pageSize: { exclusiveMinimum: 0, type: "integer" },
+          start: { minimum: 0, type: "integer" },
+          withCount: booleanParameter,
+        },
+        type: "object",
       },
-      type: "object",
     },
-  },
-  populate: {
-    description: "'*', field names, or a nested populate object",
-    in: "query",
-    name: "populate",
+  ),
+  populate: query("populate", "'*', field names, or a nested populate object", {
     ...deepObject,
     schema: { anyOf: [stringSchema, stringList, { type: "object" }] },
-  },
-  publicationFilter: {
-    description: "Derived publication cohort",
-    in: "query",
-    name: "publicationFilter",
+  }),
+  publicationFilter: query("publicationFilter", "Derived publication cohort", {
     schema: {
       enum: [
         "never-published",
@@ -105,17 +90,9 @@ const QUERY_PARAMETERS: Record<QueryName, Parameter> = {
       ],
       type: "string",
     },
-  },
-  search: {
-    description: "Full-text search",
-    in: "query",
-    name: "_q",
-    schema: stringSchema,
-  },
-  sort: {
-    description: "Sort the result",
-    in: "query",
-    name: "sort",
+  }),
+  search: query("_q", "Full-text search"),
+  sort: query("sort", "Sort the result", {
     ...deepObject,
     schema: {
       anyOf: [
@@ -124,14 +101,11 @@ const QUERY_PARAMETERS: Record<QueryName, Parameter> = {
         sortObject,
       ],
     },
-  },
-  status: {
-    description: "Document status, defaults to published",
-    in: "query",
-    name: "status",
+  }),
+  status: query("status", "Document status, defaults to published", {
     schema: { enum: ["draft", "published"], type: "string" },
-  },
+  }),
 };
 
 export { QUERY_PARAMETERS };
-export type { Parameter, QueryName };
+export type { Parameter };

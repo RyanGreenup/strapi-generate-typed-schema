@@ -1,128 +1,54 @@
 import ts from "typescript";
 
-/** Marks a value that the source code computes, so it is not known without running it. */
-const UNKNOWN: unique symbol = Symbol("unknown");
-
-/** A value read from source code without running it. */
-type StaticValue =
-  | StaticValue[]
-  | boolean
-  | number
-  | string
-  | typeof UNKNOWN
-  | { [key: string]: StaticValue };
-
-/**
- * Remove the wrappers that do not change a value: parentheses, `as` and `satisfies`.
- *
- * @param node - Any expression.
- * @returns The innermost wrapped expression.
- */
-const unwrap = (node: ts.Expression): ts.Expression => {
-  let inner = node;
-  while (
-    ts.isParenthesizedExpression(inner) ||
-    ts.isAsExpression(inner) ||
-    ts.isSatisfiesExpression(inner)
-  ) {
-    inner = inner.expression;
-  }
-
-  return inner;
-};
-
-/**
- * Read the name of an object literal property.
- *
- * @param property - One member of an object literal.
- * @returns The name, or `undefined` for a computed name, a spread or a method.
- */
-const propertyName = (
-  property: ts.ObjectLiteralElementLike,
-): string | undefined => {
-  const { name } = property;
-  if (
-    name !== undefined &&
-    (ts.isIdentifier(name) || ts.isStringLiteralLike(name))
-  ) {
-    return name.text;
-  }
-
-  return undefined;
-};
-
-/**
- * Read an object literal without running it.
- *
- * @param node - The object literal.
- * @returns Its named properties. A property with a computed value is `UNKNOWN`.
- */
-const staticObject = (
+const objectValue = (
   node: ts.ObjectLiteralExpression,
-): Record<string, StaticValue> => {
-  const result: Record<string, StaticValue> = {};
+): Record<string, unknown> => {
+  const result: Record<string, unknown> = {};
   for (const property of node.properties) {
-    const name = propertyName(property);
-    if (name !== undefined) {
-      result[name] = ts.isPropertyAssignment(property)
-        ? // oxlint-disable-next-line no-use-before-define -- the two functions call each other
-          staticValue(property.initializer)
-        : UNKNOWN;
+    const { name } = property;
+    if (
+      name !== undefined &&
+      (ts.isIdentifier(name) || ts.isStringLiteralLike(name))
+    ) {
+      result[name.text] = ts.isPropertyAssignment(property)
+        ? staticValue(property.initializer)
+        : undefined;
     }
   }
-
   return result;
 };
 
-/**
- * Read a literal expression without running it.
- *
- * @param node - Any expression.
- * @returns The literal value, or `UNKNOWN` when the expression is not a literal.
- */
-const staticValue = (node: ts.Expression): StaticValue => {
-  const inner = unwrap(node);
-  if (ts.isStringLiteralLike(inner)) {
-    return inner.text;
+/** Read a route literal without executing code; computed values stay undefined. */
+function staticValue(node: ts.Expression | undefined): unknown {
+  if (node === undefined) {
+    return undefined;
   }
-  if (ts.isNumericLiteral(inner)) {
-    return Number(inner.text);
+  if (
+    ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node)
+  ) {
+    return staticValue(node.expression);
   }
-  if (ts.isArrayLiteralExpression(inner)) {
-    return inner.elements.map((element) => staticValue(element));
+  if (ts.isObjectLiteralExpression(node)) {
+    return objectValue(node);
   }
-  if (ts.isObjectLiteralExpression(inner)) {
-    return staticObject(inner);
+  if (ts.isArrayLiteralExpression(node)) {
+    return node.elements.map(staticValue);
   }
-  const keywords = new Map<ts.SyntaxKind, StaticValue>([
-    [ts.SyntaxKind.FalseKeyword, false],
-    [ts.SyntaxKind.TrueKeyword, true],
-  ]);
+  if (ts.isStringLiteralLike(node)) {
+    return node.text;
+  }
+  if (ts.isNumericLiteral(node)) {
+    return Number(node.text);
+  }
+  if (
+    node.kind === ts.SyntaxKind.FalseKeyword ||
+    node.kind === ts.SyntaxKind.TrueKeyword
+  ) {
+    return node.kind === ts.SyntaxKind.TrueKeyword;
+  }
+  return undefined;
+}
 
-  return keywords.get(inner.kind) ?? UNKNOWN;
-};
-
-/**
- * Narrow a static value to an object.
- *
- * @param value - Any static value.
- * @returns The object, or `undefined` when `value` is something else.
- */
-const asObject = (
-  value: StaticValue | undefined,
-): Record<string, StaticValue> | undefined =>
-  typeof value === "object" && !Array.isArray(value) ? value : undefined;
-
-/**
- * Narrow a static value to a list of strings.
- *
- * @param value - Any static value.
- * @returns The strings, or `undefined` when `value` is not an array.
- */
-const asStrings = (value: StaticValue | undefined): string[] | undefined =>
-  Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : undefined;
-
-export { UNKNOWN, asObject, asStrings, staticValue };
-export type { StaticValue };
+export { staticValue };

@@ -1,61 +1,40 @@
 import type { JsonSchema } from "./document.js";
 
-import { toRecord } from "./json.js";
+import { isUnknownArray, toRecord } from "./json.js";
 
 const SCHEMAS = "#/components/schemas/";
-const IDENTITY: Record<string, true> = {
-  id: true,
-  documentId: true,
-  __component: true,
-};
-
-const isUnknownArray = (value: unknown): value is unknown[] =>
-  Array.isArray(value);
-
-/** Reserve recursive aliases before removing their entity validation rules. */
-const referenceShape = (
-  reference: string,
-  schemas: Record<string, JsonSchema>,
-  descend: (schema: JsonSchema) => JsonSchema,
-): JsonSchema => {
-  const name = reference.slice(SCHEMAS.length);
-  const alias = `${name}Unvalidated`;
-  const source = schemas[name];
-  if (source === undefined) {
-    return { $ref: reference };
-  }
-  if (!(alias in schemas)) {
-    schemas[alias] = {};
-    Object.assign(schemas[alias], descend(source));
-  }
-  return { $ref: `${SCHEMAS}${alias}` };
-};
-
-const propertyShapes = (
-  properties: JsonSchema,
-  descend: (schema: JsonSchema) => JsonSchema,
-): JsonSchema =>
-  Object.fromEntries(
-    Object.entries(properties).map(([key, value]) => [
-      key,
-      IDENTITY[key] === true
-        ? value
-        : { anyOf: [descend(toRecord(value)), { type: "null" }] },
-    ]),
-  );
+const isIdentity = (key: unknown): boolean =>
+  key === "id" || key === "documentId" || key === "__component";
 
 /** Preserve serialized structure without asserting validation of hidden values. */
-const shapeOnly = (
+function shapeOnly(
   value: unknown,
   schemas: Record<string, JsonSchema>,
-): JsonSchema => {
+): JsonSchema {
   const schema = toRecord(value);
-  const { $ref: reference, type, properties, items, required } = schema;
+  const { $ref: reference } = schema;
   if (typeof reference === "string" && reference.startsWith(SCHEMAS)) {
-    return referenceShape(reference, schemas, (source) =>
-      shapeOnly(source, schemas),
-    );
+    const name = reference.slice(SCHEMAS.length);
+    const source = schemas[name];
+    if (source === undefined) {
+      return { $ref: reference };
+    }
+    const alias = `${name}Unvalidated`;
+    if (!(alias in schemas)) {
+      // Reserve the alias before descending into a recursive model.
+      schemas[alias] = {};
+      schemas[alias] = shapeOnly(source, schemas);
+    }
+    return { $ref: `${SCHEMAS}${alias}` };
   }
+  return inlineShape(schema, schemas);
+}
+
+function inlineShape(
+  schema: JsonSchema,
+  schemas: Record<string, JsonSchema>,
+): JsonSchema {
+  const { type, properties, items, required } = schema;
   const result: JsonSchema = {};
   if (type !== undefined) {
     result["type"] = type;
@@ -65,15 +44,18 @@ const shapeOnly = (
     result["type"] = schema["const"] === null ? "null" : typeof schema["const"];
   }
   if (properties !== undefined) {
-    result["properties"] = propertyShapes(toRecord(properties), (entry) =>
-      shapeOnly(entry, schemas),
+    result["properties"] = Object.fromEntries(
+      Object.entries(toRecord(properties)).map(([key, entry]) => [
+        key,
+        isIdentity(key)
+          ? entry
+          : { anyOf: [shapeOnly(entry, schemas), { type: "null" }] },
+      ]),
     );
     result["additionalProperties"] = schema["additionalProperties"] ?? true;
   }
   if (isUnknownArray(required)) {
-    result["required"] = required.filter(
-      (key) => typeof key === "string" && IDENTITY[key] === true,
-    );
+    result["required"] = required.filter((key) => isIdentity(key));
   }
   if (items !== undefined) {
     result["items"] = shapeOnly(items, schemas);
@@ -83,6 +65,6 @@ const shapeOnly = (
     result["anyOf"] = variants.map((entry) => shapeOnly(entry, schemas));
   }
   return result;
-};
+}
 
 export { shapeOnly };

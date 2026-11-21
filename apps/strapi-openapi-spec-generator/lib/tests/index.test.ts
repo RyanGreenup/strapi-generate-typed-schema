@@ -1,18 +1,21 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
-import type { JsonSchema, OpenApiDocument, Operation } from "../src/index.js";
+import type {
+  JsonSchema,
+  OpenApiDocument,
+  Operation,
+} from "../src/document.js";
 
-import {
-  buildDocument,
-  generateSpecification,
-  readContentTypes,
-  readRoutes,
-  readRouteSource,
-} from "../src/index.js";
+import { readContentTypes } from "../src/content-types.js";
+import { buildDocument } from "../src/document.js";
+import { generateSpecification } from "../src/index.js";
 import { toRecord } from "../src/json.js";
-import { readableSchemaName, renameSchemas } from "../src/schema-names.js";
+import { readRoutes } from "../src/routes.js";
+import { renameSchemas } from "../src/schema-names.js";
 import { generatedFixture } from "./generated-fixture.js";
 
 vi.setConfig({ testTimeout: 5000 });
@@ -56,10 +59,10 @@ const parameterNames = (operation: Operation | undefined): unknown[] => {
 };
 
 describe("readContentTypes", () => {
-  it("reads kind, names and options from each schema.json", async () => {
+  it("reads exact metadata and preserves every attribute from each schema.json", async () => {
     const contentTypes = await readContentTypes(project);
 
-    expect(contentTypes).toStrictEqual([
+    const metadata = [
       {
         apiName: "article",
         draftAndPublish: true,
@@ -87,7 +90,25 @@ describe("readContentTypes", () => {
         singularName: "site-setting",
         uid: "api::site-setting.site-setting",
       },
-    ]);
+    ];
+    const expected = await Promise.all(
+      metadata.map(async (model) => {
+        const schemaPath = path.join(
+          project,
+          "src/api",
+          model.apiName,
+          "content-types",
+          model.singularName,
+          "schema.json",
+        );
+        const schema: unknown = JSON.parse(await readFile(schemaPath, "utf8"));
+        return Object.assign(model, {
+          attributes: toRecord(schema)["attributes"],
+        });
+      }),
+    );
+
+    expect(contentTypes).toStrictEqual(expected);
   });
 
   it("returns nothing for a directory without src/api", async () => {
@@ -128,30 +149,49 @@ describe("readRoutes", () => {
     ]);
   });
 
-  it("warns about a core router for an unknown content type", () => {
-    const result = readRouteSource(
-      'export default createCoreRouter("api::missing.missing");',
-      { apiName: "missing", contentTypes: [], file: "routes/missing.ts" },
-    );
-
-    expect(result.routes).toStrictEqual([]);
-    expect(result.warnings).toHaveLength(1);
-  });
-
-  it("warns about a file without routes", () => {
-    const result = readRouteSource("export default {};", {
-      apiName: "empty",
-      contentTypes: [],
-      file: "routes/empty.ts",
-    });
-
-    expect(result.warnings).toStrictEqual([
-      "routes/empty.ts: no routes were found in this file",
-    ]);
+  it("warns for unknown core routers and files without routes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "strapi-routes-"));
+    try {
+      const routes = path.join(root, "src/api/missing/routes");
+      await mkdir(routes, { recursive: true });
+      await writeFile(
+        path.join(routes, "core.ts"),
+        'export default createCoreRouter("api::missing.missing");',
+      );
+      await writeFile(path.join(routes, "empty.ts"), "export default {};");
+      await expect(readRoutes(root, [])).resolves.toStrictEqual({
+        routes: [],
+        warnings: [
+          "src/api/missing/routes/core.ts: createCoreRouter is called for a content type that is not in src/api",
+          "src/api/missing/routes/empty.ts: no routes were found in this file",
+        ],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
 describe("buildDocument", () => {
+  it.each(["constructor", "toString"])(
+    "describes %s as a custom handler",
+    async (action) => {
+      const handler = `api::article.article.${action}`;
+      const { paths } = buildDocument({
+        contentTypes: await readContentTypes(project),
+        info: { title: "fixture", version: "1" },
+        routes: [{ auth: false, handler, method: "get", path: "/custom" }],
+        schemas: {},
+        serverUrl: "/api",
+      });
+      expect(paths["/custom"]?.["get"]).toMatchObject({
+        summary: handler,
+        parameters: [],
+        responses: { default: {} },
+      });
+    },
+  );
+
   it("describes a core action with its schemas, parameters and statuses", async () => {
     const { document } = await fixtureDocument();
     const operation = document.paths["/articles"]?.["post"];
@@ -231,13 +271,24 @@ describe("buildDocument", () => {
 });
 
 describe("renameSchemas", () => {
+  it("preserves boolean component schemas and references to them", () => {
+    const ref = { $ref: "#/components/schemas/Never" };
+    expect(
+      renameSchemas({ Never: false, Anything: true, Alias: ref }),
+    ).toStrictEqual({
+      Never: { not: {} },
+      Anything: {},
+      Alias: ref,
+    });
+  });
+
   it("names a generic schema after its UID", () => {
     expect(
-      readableSchemaName(
-        "RestAnyDocumentapi_x3A__x3A_page_x2E_page-x7AB9B112138960C0",
-      ),
-    ).toBe("ApiPagePageDocument");
-    expect(readableSchemaName("RestError")).toBe("RestError");
+      renameSchemas({
+        "RestAnyDocumentapi_x3A__x3A_page_x2E_page-x7AB9B112138960C0": {},
+        RestError: {},
+      }),
+    ).toStrictEqual({ ApiPagePageDocument: {}, RestError: {} });
   });
 
   it("renames keys and references together", () => {

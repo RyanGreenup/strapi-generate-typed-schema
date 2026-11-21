@@ -4,8 +4,10 @@ TypeScript CLI, library, SolidJS web apps, and a Rust-backed OpenTUI example.
 
 ## Packages
 
-- `apps/strapi-openapi-spec-generator/lib` exports `generateSpecification`,
-  which builds the OpenAPI 3.1 document of a Strapi 5 project.
+- `apps/strapi-openapi-spec-generator/lib` exports `generateSpecification` and
+  its `SpecificationOptions` and `Specification` types. Pass the project
+  directory and optional `serverUrl` and `cacheDirectory` to get the OpenAPI 3.1
+  `document` and a `warnings` array. The library does not write the document.
 - `apps/strapi-openapi-spec-generator/cli` exposes the
   `strapi-openapi-spec-generator-cli` command and depends on
   `@ryangreenup/strapi-openapi-spec-generator-lib` via `workspace:*`.

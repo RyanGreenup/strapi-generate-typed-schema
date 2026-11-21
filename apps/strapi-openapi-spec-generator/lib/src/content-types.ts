@@ -5,25 +5,17 @@ import { parseJsonObject, toOptionalString, toRecord } from "./json.js";
 
 /** One content type of a Strapi project, as declared in its schema.json. */
 interface ContentType {
-  /** Directory name below src/api that owns the content type. */
   apiName: string;
-  /** True when `options.draftAndPublish` is set. */
+  attributes: Record<string, unknown>;
   draftAndPublish: boolean;
   kind: "collectionType" | "singleType";
-  /** True when `pluginOptions.i18n.localized` is set. */
   localized: boolean;
   pluralName: string;
   singularName: string;
-  /** For example "api::article.article". */
   uid: string;
 }
 
-/**
- * List the directories directly inside a directory.
- *
- * @param directory - The directory to read.
- * @returns The sorted directory names, or an empty list when `directory` does not exist.
- */
+/** Return sorted child directory names, or none if the directory cannot be read. */
 const listDirectories = async (directory: string): Promise<string[]> => {
   try {
     const entries = await readdir(directory, { withFileTypes: true });
@@ -37,25 +29,32 @@ const listDirectories = async (directory: string): Promise<string[]> => {
   }
 };
 
-/**
- * Read one content type from its schema.json.
- *
- * @param apiDirectory - The src/api/<apiName> directory.
- * @param name - The directory name of the content type inside content-types/.
- * @returns The content type.
- */
+/** Read all APIs in directory order, including APIs without content types. */
+const readApis = async <T>(
+  projectDirectory: string,
+  readApi: (directory: string, apiName: string) => Promise<T[]>,
+): Promise<T[]> => {
+  const root = path.join(projectDirectory, "src", "api");
+  const names = await listDirectories(root);
+  const groups = await Promise.all(
+    names.map((name) => readApi(path.join(root, name), name)),
+  );
+  return groups.flat();
+};
+
 const readContentType = async (
-  apiDirectory: string,
+  directory: string,
+  apiName: string,
   name: string,
 ): Promise<ContentType> => {
-  const file = path.join(apiDirectory, "content-types", name, "schema.json");
+  const file = path.join(directory, name, "schema.json");
   const schema = parseJsonObject(await readFile(file, "utf8"));
   const info = toRecord(schema["info"]);
   const i18n = toRecord(toRecord(schema["pluginOptions"])["i18n"]);
-  const apiName = path.basename(apiDirectory);
 
   return {
     apiName,
+    attributes: toRecord(schema["attributes"]),
     draftAndPublish: toRecord(schema["options"])["draftAndPublish"] === true,
     kind: schema["kind"] === "singleType" ? "singleType" : "collectionType",
     localized: i18n["localized"] === true,
@@ -65,32 +64,15 @@ const readContentType = async (
   };
 };
 
-/**
- * Read every content type declared below src/api of a Strapi project.
- *
- * @param projectDirectory - The root directory of the Strapi project.
- * @returns The content types, sorted by UID.
- */
-const readContentTypes = async (
-  projectDirectory: string,
-): Promise<ContentType[]> => {
-  const apiRoot = path.join(projectDirectory, "src", "api");
-  const apiNames = await listDirectories(apiRoot);
-  const perApi = await Promise.all(
-    apiNames.map(async (apiName) => {
-      const apiDirectory = path.join(apiRoot, apiName);
-      const names = await listDirectories(
-        path.join(apiDirectory, "content-types"),
-      );
+/** Read content-type schema.json files without loading the project. */
+const readContentTypes = (projectDirectory: string): Promise<ContentType[]> =>
+  readApis(projectDirectory, async (directory, apiName) => {
+    const models = path.join(directory, "content-types");
+    const names = await listDirectories(models);
+    return Promise.all(
+      names.map((name) => readContentType(models, apiName, name)),
+    );
+  });
 
-      return Promise.all(
-        names.map((name) => readContentType(apiDirectory, name)),
-      );
-    }),
-  );
-
-  return perApi.flat();
-};
-
-export { listDirectories, readContentTypes };
+export { listDirectories, readApis, readContentTypes };
 export type { ContentType };

@@ -8,28 +8,20 @@ import type { JsonSchema } from "./document.js";
 import type { SchemasInput } from "./work-directory.js";
 
 import { applyConditions } from "./conditions.js";
-import { parseJsonObject, toRecord } from "./json.js";
+import { parseJsonObject } from "./json.js";
 import { renameSchemas } from "./schema-names.js";
 import { createWorkDirectory, packageDirectory } from "./work-directory.js";
 
 /**
- * Compile and run the entry file of a work directory.
- *
- * @param work - The work directory.
- * @param cacheDirectory - The cache directory, which keeps the compiled typia plugin.
- * @returns The component schemas that the entry file printed.
- * @throws {Error} When the compiler reports an error.
+ * Run the compiler in `work` using the plugin in `cacheDirectory`.
+ * @returns The schemas from the launcher's last output line, after compiler logs.
+ * @throws If the launcher fails or its output is not JSON.
  */
 const runEntry = async (
   work: string,
   cacheDirectory: string,
-): Promise<Record<string, JsonSchema>> => {
-  const ttsx = path.join(
-    packageDirectory("ttsc", import.meta.url),
-    "lib",
-    "launcher",
-    "ttsx.js",
-  );
+): Promise<Record<string, unknown>> => {
+  const ttsx = path.join(packageDirectory("ttsc"), "lib/launcher/ttsx.js");
   const child = spawn(
     process.execPath,
     [
@@ -42,36 +34,28 @@ const runEntry = async (
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
-  const closed = once(child, "close");
   const [stdout, stderr] = await Promise.all([
     text(child.stdout),
     text(child.stderr),
+    once(child, "close"),
   ]);
-  // The "close" event carries the exit code and the signal.
-  const closeEvent: unknown[] = await closed;
-  if (closeEvent[0] !== 0) {
+  if (child.exitCode !== 0) {
     throw new Error(`The schemas could not be generated.\n${stderr}${stdout}`);
   }
-  // The entry file prints the schemas as the last line.
-  const schemas = parseJsonObject(stdout.trim().split("\n").at(-1) ?? "{}");
-
-  return Object.fromEntries(
-    Object.entries(schemas).map(([name, schema]) => [name, toRecord(schema)]),
-  );
+  const output = stdout.trim();
+  return parseJsonObject(output.slice(output.lastIndexOf("\n") + 1));
 };
 
 /**
- * Generate the JSON Schema of every request and response body of a Strapi project.
- *
- * The first run on a machine compiles the typia plugin, which takes a few minutes.
- *
- * @param input - The project, its content types and the cache directory.
- * @returns The component schemas by name.
- * @throws {Error} When the project is not ready or its types do not compile.
+ * Compile the project's declarations and apply conditions found only in model JSON.
+ * @param input - Project, content types and compiler cache.
+ * @param warnings - Receives diagnostics for unsupported conditions.
+ * @returns The named request and response schemas.
+ * @throws If staging, compilation or model parsing fails.
  */
 const generateSchemas = async (
   input: SchemasInput,
-  warnings: string[] = [],
+  warnings: string[],
 ): Promise<Record<string, JsonSchema>> => {
   const work = await createWorkDirectory(input);
   try {
