@@ -75,6 +75,10 @@ To export CMS data to Json, e.g. for a seed or testing fixture:
 strapi-openapi-spec-generator-cli dump ./backup  --spec ./specification.json --url https://cms.example
 ```
 
+Set `STRAPI_API_TOKEN` to a token with read access before you run `dump`. Pass a
+generated Strapi OpenAPI 3.1 document to `--spec`. `--no-validate` skips
+response validation, not the specification format check.
+
 ## How it works
 
 1. Content types come from `src/api/*/content-types/*/schema.json`.

@@ -64,6 +64,80 @@ const reportError = (error: unknown): void => {
   process.exitCode = 1;
 };
 
+const isRecordMap = (value: unknown): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  !Array.isArray(value) &&
+  Object.values(value).every(
+    (entry: unknown) =>
+      typeof entry === "object" && entry !== null && !Array.isArray(entry),
+  );
+
+const isDocumentInfo = (info: unknown): boolean =>
+  typeof info === "object" &&
+  info !== null &&
+  "title" in info &&
+  typeof info.title === "string" &&
+  "version" in info &&
+  typeof info.version === "string" &&
+  (!("description" in info) || typeof info.description === "string");
+
+const hasComponentMaps = (components: unknown): boolean =>
+  typeof components === "object" &&
+  components !== null &&
+  "schemas" in components &&
+  isRecordMap(components.schemas) &&
+  "securitySchemes" in components &&
+  isRecordMap(components.securitySchemes);
+
+const isSpecification = (
+  value: unknown,
+): value is DumpOptions["specification"] => {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("openapi" in value) ||
+    value.openapi !== "3.1.0" ||
+    !(
+      "info" in value &&
+      "components" in value &&
+      "paths" in value &&
+      "servers" in value
+    )
+  ) {
+    return false;
+  }
+  const { info, components, paths, servers } = value;
+  return (
+    isDocumentInfo(info) &&
+    hasComponentMaps(components) &&
+    typeof paths === "object" &&
+    paths !== null &&
+    !Array.isArray(paths) &&
+    Object.values(paths).every((methods) => isRecordMap(methods)) &&
+    Array.isArray(servers) &&
+    servers.every(
+      (server: unknown) =>
+        typeof server === "object" &&
+        server !== null &&
+        "url" in server &&
+        typeof server.url === "string",
+    )
+  );
+};
+
+const readDumpSpecification = async (
+  file: string,
+): Promise<DumpOptions["specification"]> => {
+  const specification: unknown = JSON.parse(await readFile(file, "utf8"));
+  if (!isSpecification(specification)) {
+    throw new Error(
+      `Expected a generated Strapi OpenAPI 3.1 document in ${file}`,
+    );
+  }
+  return specification;
+};
+
 const dumpCommand = defineCommand({
   meta: {
     name: "dump",
@@ -100,13 +174,14 @@ const dumpCommand = defineCommand({
   },
   run: async ({ args }) => {
     try {
+      // oxlint-disable-next-line node/no-process-env -- Read the token at the CLI boundary.
       const token = process.env["STRAPI_API_TOKEN"];
       if (token === undefined || token === "") {
         throw new Error("Set STRAPI_API_TOKEN to a token with read access.");
       }
-      const specification = JSON.parse(
-        await readFile(path.resolve(args.spec), "utf8"),
-      ) as DumpOptions["specification"];
+      const specification = await readDumpSpecification(
+        path.resolve(args.spec),
+      );
       const out = path.resolve(args.out);
       const manifest = await dump({
         specification,
