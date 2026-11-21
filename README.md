@@ -33,6 +33,8 @@ Close the tab if:
 
 ## Usage
 
+### Generate OpenAPI Spec
+
 To write the OpenAPI spec `specification.json` into the project generate the
 strapi types and call the CLI:
 
@@ -64,6 +66,14 @@ The CLI has some configuration:
   - Sets the REST prefix (default `/api`)
 - `--cache-dir`
   - Moves the cache (default `~/.cache/strapi-openapi-spec-generator`).
+
+### Export CMS Data
+
+To export CMS data to Json, e.g. for a seed or testing fixture:
+
+```sh
+strapi-openapi-spec-generator-cli dump ./backup  --spec ./specification.json --url https://cms.example
+```
 
 ## How it works
 
