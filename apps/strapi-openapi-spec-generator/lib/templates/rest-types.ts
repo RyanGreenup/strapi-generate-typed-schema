@@ -21,8 +21,9 @@
  * The `tags.*` intersections are typia annotations. They do not change the TypeScript
  * type, and typia turns each one into a JSON Schema keyword (format, pattern, minLength).
  *
- * Rules that a type cannot express, so the schemas do not have them:
- * - `unique`, schema regexes, custom validators, and the min and max of a biginteger.
+ * Limits of the declaration-derived types:
+ * - Source-only rules are handled separately. These types do not check database
+ *   uniqueness, custom validators, or biginteger bounds.
  * - Strapi also accepts `locale` in a body. It is left out here: send it as a query parameter.
  * - Keys hidden by `api.responses.privateAttributes`, custom fields (typed `unknown`),
  *   and custom controllers or middleware that rewrite a body.
@@ -42,6 +43,11 @@ type ToMany = "oneToMany" | "manyToMany" | "manyWay" | "morphMany";
 type VisibleKey<U extends UID.Schema> = {
   [K in AttrKey<U>]: Attrs<U>[K] extends Hidden ? never : K;
 }[AttrKey<U>];
+
+export type SelectableField<U extends UID.ContentType> =
+  | "id"
+  | "documentId"
+  | Extract<Schema.NonPopulatableAttributeNames<U>, VisibleKey<U>>;
 
 type ScalarKey<U extends UID.Schema> = {
   [K in VisibleKey<U>]: Attrs<U>[K] extends { type: PopulatableType }
@@ -406,6 +412,12 @@ type RelationInput<Many extends boolean> = Many extends true
   ? RelationRef[] | RelationOperations
   : RelationRef | RelationOperations;
 
+type DecimalInputString = string &
+  tags.Pattern<"^[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?$"> &
+  tags.JsonSchemaPlugin<{
+    description: "Client decimal syntax, not Strapi's coercion grammar. Strapi checks integer and range constraints after casting.";
+  }>;
+
 type InputValue<
   A,
   Published extends boolean,
@@ -422,7 +434,9 @@ type InputValue<
         ? DateTimeString | Integer
         : A extends { type: PopulatableType }
           ? StructuredInput<A, Published, Updating>
-          : ScalarValue<A, Published>;
+          : A extends { type: "integer" | "float" | "decimal" }
+            ? ScalarValue<A, Published> | DecimalInputString
+            : ScalarValue<A, Published>;
 
 export type EntryInput<
   C extends UID.Component,

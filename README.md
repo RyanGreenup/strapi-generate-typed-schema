@@ -105,12 +105,17 @@ overlapping draft/published variants under the document's `anyOf` schema.
 
 Draft-and-publish operations expose `*DraftCreateRequest`,
 `*PublishedCreateRequest`, `*DraftUpdateRequest`, and `*PublishedUpdateRequest`
-component schemas. The generic create/update request schema accepts draft input;
-the operation's `x-strapi-request-status` extension maps `status=draft` and
-`status=published` to their precise body schemas and records the core REST
-default, `published`. OpenAPI cannot express a dependency between a query
-parameter and the request body with standard schema keywords. Use the extension
-to select a state-specific validator.
+component schemas. The operation's `requestBody` uses the published schema,
+matching REST requests without `status`. For `status=draft`, use the draft
+schema in `x-strapi-request-status.schemas`: OpenAPI cannot select a body schema
+based on a query parameter.
+
+For integer, float, and decimal inputs, the schema accepts numbers and signed
+decimal strings with an optional exponent. This is a client-side syntax check,
+not Strapi's coercion algorithm. For an integer bounded to 0–10, `"3.5"` and
+`"11"` pass the string pattern but fail after casting. Conversely, Strapi can
+cast `" 3 "` and `"0x3"`, which the client pattern rejects. Responses remain
+numeric.
 
 Draft input relaxes required scalar values, minimum lengths/ranges, email
 format, and UID patterns, while retaining scalar upper bounds. Components
@@ -153,6 +158,32 @@ reintroducing nested required, format, or length rules that Strapi skipped.
 Persistence and serialization can still reject or transform values; these
 schemas do not replace running the API.
 
+### Core query parameters
+
+`fields` accepts comma-separated names or an array of those strings. Use `*`
+alone to request unrestricted selection. `*,title` and `["*", "title"]` are
+equivalent lists; do not rely on a mixed wildcard to narrow the response.
+Selectability follows the model's declared attribute kinds, not the JSON shape
+of the response: JSON and rich-text blocks are selectable, but components and
+relations require `populate`. The generator excludes passwords and private
+fields, including names in the model's `options.privateAttributes`. Runtime-only
+fields and privacy settings are not visible to static analysis.
+
+Use `page` and `pageSize` for page-based pagination, or `start` and `limit` for
+offset-based pagination. Mixing the two families is invalid, even if only one
+key from each family is present. The schema accepts `limit: -1`. Its remaining
+bounds and `withCount` spellings describe recommended client input, not every
+value the service accepts. For example, Strapi 5.62 normalizes `pageSize: 0` and
+`limit: -2` to a limit of 1, and accepts `withCount: "f"`.
+
+### Attribute metadata
+
+When model JSON is available, properties carry their source `default`,
+`x-strapi-unique`, and media `x-strapi-allowed-types` where applicable. Numeric
+inputs also carry `x-strapi-coerces-numeric-string` and, for bounded fields,
+`x-strapi-post-coercion-bounds`. These annotations neither insert defaults nor
+check database uniqueness or uploaded file types.
+
 ### Relation metadata
 
 Strapi's generated declarations do not say which side of a relation owns it.
@@ -168,10 +199,13 @@ in `src/extensions` are covered too.
   A custom route whose handler is a core action (for example
   `api::page.page.findOne`) gets the core schemas.
 - Plugin routes (upload, users-permissions, i18n) are not included.
-- Unsupported rules include `unique`, custom validators, and biginteger ranges.
-  Schema-defined `regex` patterns are also absent because Strapi's generated
-  types do not carry them. The built-in UID pattern does not provide
-  custom-regex support.
+- Unsupported validation rules include custom validators and biginteger ranges.
+  For published writes, the generator reads string-like attributes' `regex`
+  rules from model JSON. A custom UID pattern replaces its built-in pattern.
+  Drafts, responses, and conditionally hidden fields do not inherit these
+  checks. Strapi uses flagless JavaScript regexes; JSON Schema validators use
+  Unicode matching. The generator enforces a conservative subset and emits a
+  warning and `x-strapi-regex` metadata for unsupported expressions.
 - Response restrictions describe the core REST API; custom controllers,
   middleware, or direct database writes can bypass Strapi's validation.
 - Regenerate Strapi declarations after schema edits. The generator combines

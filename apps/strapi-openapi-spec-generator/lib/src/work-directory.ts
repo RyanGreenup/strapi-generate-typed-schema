@@ -9,10 +9,10 @@ import {
 import { createRequire } from "node:module";
 import path from "node:path";
 
-import type { ContentType } from "./content-types.js";
+import type { ContentType, DiscoveredContentType } from "./content-types.js";
 import type { Model } from "./schema-probes.js";
 
-import { isUnknownArray, parseJsonObject } from "./json.js";
+import { isUnknownArray, parseJsonObject, toRecord } from "./json.js";
 import { ERROR_SCHEMA } from "./names.js";
 import { modelProbes } from "./schema-probes.js";
 
@@ -32,6 +32,10 @@ const discoverySource = ({
   const owners = [...contentTypes, ...components]
     .map(({ uid }) => JSON.stringify(uid))
     .join(" | ");
+  const selectable = contentTypes.map(({ uid }) => {
+    const literal = JSON.stringify(uid);
+    return `${literal}: typia.reflect.literals<T.SelectableField<${literal}>>()`;
+  });
   return String.raw`import typia from "typia";
 import type { UID } from "@strapi/strapi";
 import type * as T from "./rest-types.ts";
@@ -42,45 +46,61 @@ type Related = Extract<External, UID.ContentType>;
 const related = typia.reflect.literals<Related | "">().filter(Boolean);
 const drafts = typia.reflect.literals<T.DraftModels<Related> | "">().filter(Boolean);
 const components = typia.reflect.literals<Extract<External, UID.Component> | "">().filter(Boolean);
-process.stdout.write("\n" + JSON.stringify({ related, drafts, components }) + "\n");
+const selectable = { ${selectable.join(",\n")} };
+process.stdout.write("\n" + JSON.stringify({ related, drafts, components, selectable }) + "\n");
 `;
 };
 
-const uids = (value: unknown): string[] => {
+const stringList = (value: unknown, label: string): string[] => {
   if (
     !isUnknownArray(value) ||
-    !value.every((uid) => typeof uid === "string")
+    !value.every((item) => typeof item === "string")
   ) {
-    throw new Error("Invalid schema discovery output: expected a UID list");
+    throw new Error(
+      `Invalid schema discovery output: expected a string list for ${label}`,
+    );
   }
   return value;
 };
 
-/** Write literal schema probes for the source models and their discovered populated targets. */
-const writeSchemaEntry = async (
-  work: string,
+const readDiscovery = (
   { contentTypes, components }: SchemasInput,
   output: string,
-): Promise<void> => {
+): { models: Model[]; contentTypes: DiscoveredContentType[] } => {
   const discovery = parseJsonObject(output);
-  const drafts = new Set(uids(discovery["drafts"]));
+  const drafts = new Set(stringList(discovery["drafts"], "drafts"));
+  const fields = toRecord(discovery["selectable"]);
+  const discovered = contentTypes.map((content) => ({
+    ...content,
+    selectableFields: stringList(fields[content.uid], content.uid).filter(
+      (key) => !content.privateAttributes.includes(key),
+    ),
+  }));
   const models: Model[] = [
-    ...contentTypes.map((content) => ({
+    ...discovered.map((content) => ({
       uid: content.uid,
       content,
       drafts: content.draftAndPublish,
     })),
     ...components.map(({ uid }) => ({ uid, component: true, drafts: true })),
-    ...uids(discovery["related"]).map((uid) => ({
+    ...stringList(discovery["related"], "related").map((uid) => ({
       uid,
       drafts: drafts.has(uid),
     })),
-    ...uids(discovery["components"]).map((uid) => ({
+    ...stringList(discovery["components"], "components").map((uid) => ({
       uid,
       component: true,
       drafts: true,
     })),
   ];
+  return { models, contentTypes: discovered };
+};
+
+/** Write literal schema probes for the source models and their discovered populated targets. */
+const writeSchemaEntry = async (
+  work: string,
+  models: Model[],
+): Promise<void> => {
   const probes = models.flatMap((model) => modelProbes(model));
   probes.push({ type: "T.RestError", identity: { name: ERROR_SCHEMA } });
   const entry = String.raw`import typia from "typia";
@@ -178,5 +198,10 @@ const createWorkDirectory = async (input: SchemasInput): Promise<string> => {
   return work;
 };
 
-export { createWorkDirectory, packageDirectory, writeSchemaEntry };
+export {
+  createWorkDirectory,
+  packageDirectory,
+  readDiscovery,
+  writeSchemaEntry,
+};
 export type { SchemasInput };

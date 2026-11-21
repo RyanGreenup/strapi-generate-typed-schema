@@ -2,6 +2,9 @@
   "collectionName": "components_shared_conditional_links",
   "info": { "displayName": "Conditional link" },
   "attributes": {
+    "active": { "type": "boolean", "default": false },
+    "weight": { "type": "float", "default": 0 },
+    "attachment": { "type": "media", "allowedTypes": ["images", "files"] },
     "kind": {
       "type": "enumeration",
       "enum": ["internal", "external"],
@@ -11,6 +14,7 @@
     "label": { "type": "string", "required": true, "minLength": 1 },
     "url": {
       "type": "string",
+      "unique": true,
       "required": true,
       "minLength": 1,
       "conditions": { "visible": { "==": [{ "var": "kind" }, "external"] } }

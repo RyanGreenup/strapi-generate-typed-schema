@@ -7,22 +7,12 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { parseJsonObject, toRecord } from "../src/json.js";
 import { generatedFixture } from "./generated-fixture.js";
 
 vi.setConfig({ testTimeout: 5000 });
 
-/** Give the article a rich text `body`. */
+/** Register a rich text field in the article declarations only. */
 const addArticleBody = async (directory: string): Promise<void> => {
-  const schemaPath = path.join(
-    directory,
-    "src/api/article/content-types/article/schema.json",
-  );
-  const schema = parseJsonObject(await readFile(schemaPath, "utf8"));
-  const attributes = toRecord(schema["attributes"]);
-  attributes["body"] = { type: "blocks" };
-  await writeFile(schemaPath, JSON.stringify({ ...schema, attributes }));
-
   const typesPath = path.join(directory, "types/generated/contentTypes.d.ts");
   const types = await readFile(typesPath, "utf8");
   const anchor = "    cover: Schema.Attribute.Media";
@@ -36,6 +26,11 @@ const addArticleBody = async (directory: string): Promise<void> => {
 };
 
 const fixture = generatedFixture(addArticleBody);
+
+it("selects a declaration-only blocks field on its own model", () => {
+  expect(fixture.validateQuery("/articles", "fields")("body")).toBe(true);
+  expect(fixture.validateQuery("/pages", "fields")("body")).toBe(false);
+});
 
 const published = {
   id: 1,

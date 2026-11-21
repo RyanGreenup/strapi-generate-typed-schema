@@ -13,6 +13,7 @@ type Variant = [
   name: string,
   mode?: NonNullable<Identity["mode"]>,
   flags?: string,
+  publishedInput?: boolean,
 ];
 
 // The flag-dispatch aliases may be emitted independently of their concrete branches.
@@ -28,6 +29,8 @@ for (const state of ["Published", "Draft"]) {
       `Rest${state}${action}Input`,
       `${state}${action}Input`,
       mode,
+      "",
+      state === "Published",
     ]);
     for (const kind of ["Entry", "Zone"]) {
       dispatchVariants.push([
@@ -35,6 +38,7 @@ for (const state of ["Published", "Draft"]) {
         `${state}${action}${kind}Helper`,
         mode,
         flags,
+        state === "Published",
       ]);
     }
   }
@@ -76,12 +80,24 @@ const operationVariants = (model: ContentType): Variant[] => {
     const mode = action === "Create" ? "create" : "update";
     for (const state of states) {
       variants.push(
-        [`Rest${state}${action}Input`, `${prefix}${state}${action}Input`, mode],
+        [
+          `Rest${state}${action}Input`,
+          `${prefix}${state}${action}Input`,
+          mode,
+          "",
+          state === "Published",
+        ],
         [`Rest${state}${action}Body`, `${prefix}${state}${action}Request`],
       );
     }
     variants.push(
-      [`Rest${action}Input`, `${prefix}${action}Input`, mode],
+      [
+        `Rest${action}Input`,
+        `${prefix}${action}Input`,
+        mode,
+        "",
+        !model.draftAndPublish,
+      ],
       [`Rest${action}Body`, names[mode]],
     );
   }
@@ -98,7 +114,7 @@ const modelProbes = ({
   const prefix = pascalCase(uid);
   const argument = JSON.stringify(uid);
   const probe = (
-    [generic, name, mode, flags = ""]: Variant,
+    [generic, name, mode, flags = "", publishedInput = false]: Variant,
     state?: Identity["state"],
   ): Probe => {
     const type = `T.${generic}<${argument}${flags}>`;
@@ -106,6 +122,7 @@ const modelProbes = ({
     if (mode !== undefined) {
       identity.mode = mode;
     }
+    if (publishedInput) identity.publishedInput = true;
     if (state !== undefined) {
       identity.state = state;
     }
@@ -132,8 +149,18 @@ const modelProbes = ({
     roots.push(...operationVariants(content).map((variant) => probe(variant)));
   }
   if (component) {
-    for (const [generic, suffix, ...parameters] of componentVariants) {
-      roots.push(probe([generic, `${prefix}${suffix}`, ...parameters]));
+    for (const [
+      generic,
+      suffix,
+      mode = "response",
+      flags = "",
+      published,
+    ] of componentVariants) {
+      const publishedInput =
+        mode !== "response" && (published ?? suffix.startsWith("Published"));
+      roots.push(
+        probe([generic, `${prefix}${suffix}`, mode, flags, publishedInput]),
+      );
     }
   }
   return roots;

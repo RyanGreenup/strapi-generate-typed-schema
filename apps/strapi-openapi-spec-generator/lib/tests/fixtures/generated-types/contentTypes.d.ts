@@ -57,6 +57,19 @@ export interface ApiPagePage extends Struct.CollectionTypeSchema {
     title: Schema.Attribute.String &
       Schema.Attribute.Required &
       Schema.Attribute.SetMinMaxLength<{ minLength: 5; maxLength: 10 }>;
+    passcode: Schema.Attribute.Password;
+    secret: Schema.Attribute.String & Schema.Attribute.Private;
+    editorNote: Schema.Attribute.Text;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    locale: Schema.Attribute.String;
+    // Added during registration; not present in the page's schema.json.
+    plugin$date: Schema.Attribute.DateTime;
+    pluginJson: Schema.Attribute.JSON;
+    pluginPassword: Schema.Attribute.Password;
+    pluginPrivate: Schema.Attribute.String & Schema.Attribute.Private;
+    pluginComponent: Schema.Attribute.Component<"shared.seo", false>;
   };
 }
 
@@ -113,6 +126,9 @@ export interface SharedConditionalLink extends Struct.ComponentSchema {
   collectionName: "components_shared_conditional_links";
   info: { displayName: "Conditional link" };
   attributes: {
+    active: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
+    weight: Schema.Attribute.Float & Schema.Attribute.DefaultTo<0>;
+    attachment: Schema.Attribute.Media<"images" | "files", false>;
     kind: Schema.Attribute.Enumeration<["internal", "external"]> &
       Schema.Attribute.Required &
       Schema.Attribute.DefaultTo<"internal">;

@@ -1,7 +1,7 @@
 {
   "kind": "collectionType",
   "info": { "singularName": "page", "pluralName": "pages" },
-  "options": { "draftAndPublish": false },
+  "options": { "draftAndPublish": false, "privateAttributes": ["editorNote"] },
   "pluginOptions": { "i18n": { "localized": true } },
   "attributes": {
     "title": {
@@ -9,6 +9,9 @@
       "required": true,
       "minLength": 5,
       "maxLength": 10
-    }
+    },
+    "editorNote": { "type": "text" },
+    "passcode": { "type": "password" },
+    "secret": { "type": "string", "private": true }
   }
 }

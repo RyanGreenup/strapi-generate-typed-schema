@@ -34,7 +34,10 @@ const fixtureDocument = async (): Promise<{
   const contentTypes = await readContentTypes(project);
   const { routes, warnings } = await readRoutes(project, contentTypes);
   const document = buildDocument({
-    contentTypes,
+    contentTypes: contentTypes.map((model) => ({
+      ...model,
+      selectableFields: ["id", "documentId"],
+    })),
     info: { title: "fixture", version: "1.0.0" },
     routes,
     schemas: {},
@@ -68,6 +71,7 @@ describe("readContentTypes", () => {
         draftAndPublish: true,
         kind: "collectionType",
         localized: false,
+        privateAttributes: [],
         pluralName: "articles",
         singularName: "article",
         uid: "api::article.article",
@@ -77,6 +81,7 @@ describe("readContentTypes", () => {
         draftAndPublish: false,
         kind: "collectionType",
         localized: true,
+        privateAttributes: ["editorNote"],
         pluralName: "pages",
         singularName: "page",
         uid: "api::page.page",
@@ -86,6 +91,7 @@ describe("readContentTypes", () => {
         draftAndPublish: false,
         kind: "singleType",
         localized: false,
+        privateAttributes: ["id", "documentId", "siteName"],
         pluralName: "site-settings",
         singularName: "site-setting",
         uid: "api::site-setting.site-setting",
@@ -178,7 +184,10 @@ describe("buildDocument", () => {
     async (action) => {
       const handler = `api::article.article.${action}`;
       const { paths } = buildDocument({
-        contentTypes: await readContentTypes(project),
+        contentTypes: (await readContentTypes(project)).map((model) => ({
+          ...model,
+          selectableFields: ["id", "documentId"],
+        })),
         info: { title: "fixture", version: "1" },
         routes: [{ auth: false, handler, method: "get", path: "/custom" }],
         schemas: {},
@@ -202,7 +211,7 @@ describe("buildDocument", () => {
         content: {
           "application/json": {
             schema: {
-              $ref: "#/components/schemas/ApiArticleArticleCreateRequest",
+              $ref: "#/components/schemas/ApiArticleArticlePublishedCreateRequest",
             },
           },
         },
@@ -529,7 +538,156 @@ describe("generateSpecification", () => {
 /* oxlint-disable unicorn/no-null -- JSON responses distinguish null from omitted fields. */
 describe("generated response validation", () => {
   const fixture = generatedFixture();
-  const { compileSchema, validateDocument } = fixture;
+  const { compileSchema, validateDocument, validateQuery } = fixture;
+
+  it("validates core query pagination without mixing page and offset keys", () => {
+    const accepts = validateQuery("/articles", "pagination");
+    for (const value of [
+      {},
+      { withCount: true },
+      { page: 1 },
+      { pageSize: 3 },
+      { start: 0 },
+      { page: 2, pageSize: 3 },
+      { start: 0, limit: 3 },
+      { limit: -1 },
+      { limit: 0 },
+    ]) {
+      expect(accepts(value), JSON.stringify(value)).toBe(true);
+    }
+    for (const value of [
+      { page: 1, start: 0 },
+      { page: 1, limit: 3 },
+      { pageSize: 3, start: 0 },
+      { pageSize: 3, limit: 3 },
+      { page: 0 },
+      { pageSize: 0 },
+      { start: -1 },
+      { limit: -2 },
+      { limit: 1.5 },
+    ]) {
+      expect(accepts(value), JSON.stringify(value)).toBe(false);
+    }
+  });
+
+  it("preserves source metadata by model, property and input role", () => {
+    const schemas = fixture.document!.components.schemas;
+    for (const suffix of [
+      "PublishedDocument",
+      "PublishedCreateInput",
+      "DraftUpdateInput",
+    ]) {
+      const properties = toRecord(
+        schemas[`ApiArticleArticle${suffix}`]?.["properties"],
+      );
+      expect(properties["title"]).toHaveProperty("x-strapi-unique", true);
+      expect(properties["cover"]).toHaveProperty("x-strapi-allowed-types", [
+        "images",
+      ]);
+      if (suffix === "PublishedDocument") {
+        expect(properties["rating"]).not.toHaveProperty(
+          "x-strapi-coerces-numeric-string",
+        );
+      } else {
+        expect(properties["rating"]).toMatchObject({
+          "x-strapi-coerces-numeric-string": true,
+          "x-strapi-post-coercion-bounds": { minimum: 2, maximum: 8 },
+        });
+      }
+    }
+    for (const suffix of [
+      "PublishedCreateEntryInput",
+      "DraftCreateBlockInput",
+    ]) {
+      const schema = schemas[`SharedConditionalLink${suffix}`];
+      expect(schema).toMatchObject({
+        properties: {
+          active: { default: false },
+          weight: { default: 0, "x-strapi-coerces-numeric-string": true },
+          attachment: { "x-strapi-allowed-types": ["images", "files"] },
+          url: { "x-strapi-unique": true },
+        },
+        allOf: expect.arrayContaining([
+          expect.objectContaining({
+            then: {
+              properties: {
+                url: expect.objectContaining({ "x-strapi-unique": true }),
+              },
+              ...(suffix.startsWith("Published") ? { required: ["url"] } : {}),
+            },
+          }),
+        ]),
+      });
+      expect(toRecord(schema?.["properties"])["weight"]).not.toHaveProperty(
+        "x-strapi-post-coercion-bounds",
+      );
+    }
+    expect(
+      toRecord(schemas["ApiPagePagePublishedDocument"]?.["properties"])[
+        "title"
+      ],
+    ).not.toHaveProperty("x-strapi-unique");
+  });
+
+  it("validates each model's selectable attributes, including declaration-only fields", () => {
+    const article = validateQuery("/articles", "fields");
+    const page = validateQuery("/pages", "fields");
+    for (const fields of [
+      "*",
+      "  title, slug , publishedAt  ",
+      "*,title",
+      ["title,*", "slug"],
+      ["*", "email"],
+      ["id, documentId", "createdAt", "updatedAt"],
+    ]) {
+      expect(article(fields), JSON.stringify(fields)).toBe(true);
+    }
+    for (const fields of [
+      "",
+      "title,",
+      "*,notAField",
+      "notAField",
+      "locale",
+      "page",
+      "seo",
+      "cover",
+      "blocks",
+      ["title", "plugin$date"],
+      "pluginJson",
+      ["id", "unknown"],
+      { title: true },
+    ]) {
+      expect(article(fields), JSON.stringify(fields)).toBe(false);
+    }
+    for (const field of [
+      "plugin$date",
+      "pluginJson",
+      "locale,title",
+      "publishedAt",
+    ]) {
+      expect(page(field), field).toBe(true);
+    }
+    for (const field of [
+      "slug",
+      "editorNote",
+      "passcode",
+      "secret",
+      "pluginComponent",
+      "pluginPassword",
+      "pluginPrivate",
+      "createdBy",
+    ]) {
+      expect(page(field), field).toBe(false);
+    }
+  });
+
+  it("allows wildcard tokens but not empty tokens when every field is private", () => {
+    const accepts = validateQuery("/site-setting", "fields");
+    expect(accepts("*")).toBe(true);
+    for (const fields of ["", "*,", ["*,"], "siteName", "id", "documentId"]) {
+      expect(accepts(fields), JSON.stringify(fields)).toBe(false);
+    }
+  });
 
   const published = {
     id: 1,
@@ -538,7 +696,7 @@ describe("generated response validation", () => {
   };
   const draftEntry = { ...published, publishedAt: null };
 
-  it("accepts incomplete draft writes through generated operation bodies", () => {
+  it("validates published writes by default and incomplete writes for explicit drafts", () => {
     for (const [route, method] of [
       ["/articles", "post"],
       ["/articles/{id}", "put"],
@@ -546,7 +704,13 @@ describe("generated response validation", () => {
       const operation = fixture.document?.paths[route]?.[method];
       const content = toRecord(toRecord(operation?.["requestBody"])["content"]);
       const schema = toRecord(toRecord(content["application/json"])["schema"]);
-      const validate = compileSchema(schema);
+      expect(compileSchema(schema)({ data: { title: null } })).toBe(false);
+      if (method === "post")
+        expect(compileSchema(schema)({ data: {} })).toBe(false);
+      const status = toRecord(operation?.["x-strapi-request-status"]);
+      const validate = compileSchema(
+        toRecord(toRecord(status["schemas"])["draft"]),
+      );
       expect(
         validate({
           data: { seo: [], title: null, email: "invalid", rating: -1 },
@@ -554,6 +718,22 @@ describe("generated response validation", () => {
       ).toBe(true);
       expect(validate({ data: { seo: [], title: "12345678901" } })).toBe(false);
     }
+  });
+
+  it("accepts numeric strings only on input", () => {
+    const data = { title: "12345", email: "a@b.co", seo: [{ heading: "SEO" }] };
+    for (const state of ["Published", "Draft"]) {
+      const validate = validateDocument(
+        `ApiArticleArticle${state}CreateRequest`,
+      );
+      expect(validate({ data: { ...data, price: "12.34", rating: "3" } })).toBe(
+        true,
+      );
+      expect(validate({ data: { ...data, rating: "abc" } })).toBe(false);
+    }
+    const response = validateDocument("ApiArticleArticlePublishedDocument");
+    expect(response({ ...published, rating: 3 })).toBe(true);
+    expect(response({ ...published, rating: "3" })).toBe(false);
   });
 
   it("exposes publication-specific create constraints without requiring defaulted or relational attributes", () => {

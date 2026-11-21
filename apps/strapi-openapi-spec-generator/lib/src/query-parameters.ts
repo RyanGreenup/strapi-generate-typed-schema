@@ -41,9 +41,11 @@ const query = (
 
 /** Query descriptors for Strapi's core REST actions. */
 const QUERY_PARAMETERS: Record<QueryName, Parameter> = {
-  fields: query("fields", "Scalar fields to return", {
-    schema: { anyOf: [stringSchema, stringList] },
-  }),
+  fields: query(
+    "fields",
+    "Select declared public fields. Use '*' alone for unrestricted selection; do not rely on a mixed wildcard list to narrow the response. Runtime-only privacy settings are not reflected.",
+    { schema: { anyOf: [stringSchema, stringList] } },
+  ),
   filters: query("filters", "Attribute filters and $and / $or / $not", {
     ...deepObject,
     schema: { type: "object" },
@@ -57,12 +59,18 @@ const QUERY_PARAMETERS: Record<QueryName, Parameter> = {
   locale: query("locale", "Locale code"),
   pagination: query(
     "pagination",
-    "Page-based (page, pageSize) or offset-based (start, limit) pagination, not both",
+    "Use page/pageSize or start/limit, not both. Bounds and withCount spellings describe recommended client inputs; Strapi also normalizes some values outside them.",
     {
       ...deepObject,
       schema: {
+        not: {
+          allOf: [
+            { anyOf: [{ required: ["page"] }, { required: ["pageSize"] }] },
+            { anyOf: [{ required: ["start"] }, { required: ["limit"] }] },
+          ],
+        },
         properties: {
-          limit: { type: "integer" },
+          limit: { minimum: -1, type: "integer" },
           page: { exclusiveMinimum: 0, type: "integer" },
           pageSize: { exclusiveMinimum: 0, type: "integer" },
           start: { minimum: 0, type: "integer" },

@@ -1,4 +1,4 @@
-import type { ContentType } from "./content-types.js";
+import type { DiscoveredContentType } from "./content-types.js";
 import type { Parameter } from "./query-parameters.js";
 import type { CoreAction, Route } from "./routes.js";
 
@@ -27,7 +27,7 @@ interface DocumentInfo {
 }
 
 interface DocumentInput {
-  contentTypes: ContentType[];
+  contentTypes: DiscoveredContentType[];
   info: DocumentInfo;
   routes: Route[];
   schemas: Record<string, JsonSchema>;
@@ -98,7 +98,7 @@ const SINGLE_TYPE_ACTIONS: Partial<Record<CoreAction, ActionSpec>> = {
 };
 
 interface CoreHandler {
-  contentType: ContentType;
+  contentType: DiscoveredContentType;
   spec: ActionSpec;
 }
 
@@ -114,6 +114,22 @@ const errorResponse = (description: string): JsonSchema => ({
   content: jsonContent(ERROR_SCHEMA),
   description,
 });
+
+const fieldsParameter = (model: DiscoveredContentType): Parameter => {
+  const alternatives = ["\\*"];
+  for (const name of model.selectableFields) {
+    alternatives.push(name.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+  }
+  const field = `(?:${alternatives.join("|")})`;
+  const item = {
+    pattern: `^\\s*${field}(?:\\s*,\\s*${field})*\\s*$`,
+    type: "string",
+  };
+  return {
+    ...query.fields,
+    schema: { anyOf: [item, { items: item, type: "array" }] },
+  };
+};
 
 const routeParameters = (
   routePath: string,
@@ -134,7 +150,13 @@ const routeParameters = (
     });
   }
   if (core !== undefined) {
-    parameters.push(...core.spec.query);
+    parameters.push(
+      ...core.spec.query.map((parameter) =>
+        parameter === query.fields
+          ? fieldsParameter(core.contentType)
+          : parameter,
+      ),
+    );
     if (core.contentType.localized) {
       parameters.push(query.locale);
     }
@@ -150,26 +172,30 @@ const routeParameters = (
   return parameters;
 };
 
-const requestFields = (name: string, draftAndPublish: boolean): Operation => ({
-  requestBody: { content: jsonContent(name), required: true },
-  ...(draftAndPublish && {
-    // OpenAPI cannot make a body schema depend on a query parameter.
-    "x-strapi-request-status": {
-      parameter: "status",
-      default: "published",
-      schemas: {
-        draft: reference(name.replace(/(?:Create|Update)Request$/u, "Draft$&")),
-        published: reference(
-          name.replace(/(?:Create|Update)Request$/u, "Published$&"),
-        ),
+const requestFields = (name: string, draftAndPublish: boolean): Operation => {
+  const suffix = /(?:Create|Update)Request$/u;
+  const published = draftAndPublish
+    ? name.replace(suffix, "Published$&")
+    : name;
+  return {
+    requestBody: { content: jsonContent(published), required: true },
+    ...(draftAndPublish && {
+      // OpenAPI cannot make a body schema depend on a query parameter.
+      "x-strapi-request-status": {
+        parameter: "status",
+        default: "published",
+        schemas: {
+          draft: reference(name.replace(suffix, "Draft$&")),
+          published: reference(published),
+        },
       },
-    },
-  }),
-});
+    }),
+  };
+};
 
 const findCoreAction = (
   route: Route,
-  contentTypes: ContentType[],
+  contentTypes: DiscoveredContentType[],
 ): CoreHandler | undefined => {
   const handler = route.handler ?? "";
   const split = handler.lastIndexOf(".");
@@ -191,7 +217,7 @@ const findCoreAction = (
 const buildOperation = (
   route: Route,
   path: string,
-  contentTypes: ContentType[],
+  contentTypes: DiscoveredContentType[],
 ): Operation => {
   const core = findCoreAction(route, contentTypes);
   const common = {

@@ -1,5 +1,6 @@
 {
   "kind": "singleType",
   "info": { "singularName": "site-setting", "pluralName": "site-settings" },
+  "options": { "privateAttributes": ["id", "documentId", "siteName"] },
   "attributes": { "siteName": { "type": "string" } }
 }

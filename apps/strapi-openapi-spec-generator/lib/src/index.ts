@@ -93,7 +93,7 @@ export const generateSpecification = async (
     );
   }
   const { routes, warnings } = await readRoutes(projectDirectory, contentTypes);
-  const schemas = await generateSchemas(
+  const generated = await generateSchemas(
     {
       cacheDirectory:
         options.cacheDirectory ??
@@ -105,10 +105,9 @@ export const generateSpecification = async (
   );
 
   const document = buildDocument({
-    contentTypes,
+    ...generated,
     info,
     routes,
-    schemas,
     serverUrl: options.serverUrl ?? "/api",
   });
   checkOperationRefs(document.paths, document);

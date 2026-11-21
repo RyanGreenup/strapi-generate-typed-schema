@@ -12,6 +12,7 @@ import { afterAll, beforeAll } from "vitest";
 import type { JsonSchema, OpenApiDocument } from "../src/document.js";
 
 import { generateSpecification } from "../src/index.js";
+import { isUnknownArray, toRecord } from "../src/json.js";
 
 const GENERATION_TIMEOUT = 600_000;
 
@@ -21,6 +22,7 @@ interface GeneratedFixture {
   warnings: string[];
   compileSchema: (schema: JsonSchema) => ValidateFunction;
   validateDocument: (name: string) => ValidateFunction;
+  validateQuery: (route: string, name: string) => ValidateFunction;
 }
 
 const createGeneratedProject = async (): Promise<string> => {
@@ -66,6 +68,18 @@ export const generatedFixture = (
       ajv.compile({ components: fixture.document?.components, ...schema }),
     validateDocument: (name) =>
       fixture.compileSchema({ $ref: `#/components/schemas/${name}` }),
+    validateQuery: (route, name) => {
+      const parameters =
+        fixture.document?.paths[route]?.["get"]?.["parameters"];
+      const parameter = isUnknownArray(parameters)
+        ? parameters.find((value) => toRecord(value)["name"] === name)
+        : undefined;
+      const schema = toRecord(parameter)["schema"];
+      if (schema === undefined) {
+        throw new Error(`No ${name} schema for ${route}`);
+      }
+      return fixture.compileSchema(toRecord(schema));
+    },
   };
 
   beforeAll(async () => {

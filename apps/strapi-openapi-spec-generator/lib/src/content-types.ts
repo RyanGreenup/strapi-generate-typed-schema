@@ -1,7 +1,12 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
-import { parseJsonObject, toOptionalString, toRecord } from "./json.js";
+import {
+  isUnknownArray,
+  parseJsonObject,
+  toOptionalString,
+  toRecord,
+} from "./json.js";
 
 /** One content type of a Strapi project, as declared in its schema.json. */
 interface ContentType {
@@ -11,8 +16,13 @@ interface ContentType {
   kind: "collectionType" | "singleType";
   localized: boolean;
   pluralName: string;
+  privateAttributes: string[];
   singularName: string;
   uid: string;
+}
+
+interface DiscoveredContentType extends ContentType {
+  selectableFields: string[];
 }
 
 /** Return sorted child directory names, or none if the directory cannot be read. */
@@ -51,14 +61,19 @@ const readContentType = async (
   const schema = parseJsonObject(await readFile(file, "utf8"));
   const info = toRecord(schema["info"]);
   const i18n = toRecord(toRecord(schema["pluginOptions"])["i18n"]);
+  const options = toRecord(schema["options"]);
+  const privateAttributes = options["privateAttributes"];
 
   return {
     apiName,
     attributes: toRecord(schema["attributes"]),
-    draftAndPublish: toRecord(schema["options"])["draftAndPublish"] === true,
+    draftAndPublish: options["draftAndPublish"] === true,
     kind: schema["kind"] === "singleType" ? "singleType" : "collectionType",
     localized: i18n["localized"] === true,
     pluralName: toOptionalString(info["pluralName"]) ?? `${name}s`,
+    privateAttributes: isUnknownArray(privateAttributes)
+      ? privateAttributes.filter((name) => typeof name === "string")
+      : [],
     singularName: toOptionalString(info["singularName"]) ?? name,
     uid: `api::${apiName}.${name}`,
   };
@@ -75,4 +90,4 @@ const readContentTypes = (projectDirectory: string): Promise<ContentType[]> =>
   });
 
 export { listDirectories, readApis, readContentTypes };
-export type { ContentType };
+export type { ContentType, DiscoveredContentType };

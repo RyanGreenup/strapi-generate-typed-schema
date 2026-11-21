@@ -7,6 +7,7 @@ interface SchemaRoot {
   name: string;
   uid?: string;
   mode?: ConditionContext["mode"];
+  publishedInput?: true;
   state?: "document" | "published" | "draft";
   schema: unknown;
 }
@@ -17,7 +18,7 @@ interface Emission {
 }
 
 const isRoot = (value: unknown): value is SchemaRoot => {
-  const { name, uid, mode, state, schema } = toRecord(value);
+  const { name, uid, mode, state, publishedInput, schema } = toRecord(value);
   return (
     typeof name === "string" &&
     name !== "" &&
@@ -26,6 +27,8 @@ const isRoot = (value: unknown): value is SchemaRoot => {
       mode === "create" ||
       mode === "update" ||
       mode === "response") &&
+    (publishedInput === undefined ||
+      (publishedInput === true && (mode === "create" || mode === "update"))) &&
     (state === undefined ||
       state === "document" ||
       state === "draft" ||
