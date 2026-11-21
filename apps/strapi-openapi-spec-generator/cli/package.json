@@ -9,7 +9,8 @@
     "strapi-openapi-spec-generator-cli": "./dist/index.mjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "templates"
   ],
   "type": "module",
   "exports": {
@@ -27,15 +28,22 @@
     "lint": "oxlint --type-aware --type-check . && oxfmt -c node_modules/@ryangreenup/oxlint-config/oxfmt.json --check .",
     "fix": "oxlint --fix --fix-suggestions --type-aware --type-check .",
     "release": "bumpp",
+    "prepack": "pnpm --filter @ryangreenup/strapi-openapi-spec-generator-lib build && pnpm run build",
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "@bomb.sh/tab": "catalog:",
-    "@ryangreenup/strapi-openapi-spec-generator-lib": "workspace:*",
-    "citty": "catalog:"
+    "@typescript/native": "catalog:",
+    "ajv": "catalog:",
+    "ajv-formats": "catalog:",
+    "citty": "catalog:",
+    "ttsc": "catalog:",
+    "typescript": "catalog:",
+    "typia": "catalog:"
   },
   "devDependencies": {
     "@ryangreenup/oxlint-config": "workspace:*",
+    "@ryangreenup/strapi-openapi-spec-generator-lib": "workspace:*",
     "@ryangreenup/typescript-config": "workspace:*",
     "@types/node": "catalog:",
     "bumpp": "catalog:",
@@ -43,7 +51,6 @@
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
     "tsdown": "catalog:",
-    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

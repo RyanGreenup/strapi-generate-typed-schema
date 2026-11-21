@@ -3,6 +3,7 @@ import { defineConfig } from "oxlint";
 
 export default defineConfig({
   extends: [cliCfg],
+  ignorePatterns: ["templates/**"],
   overrides: [
     {
       // The e2e test blocks, synchronously is easier to read
