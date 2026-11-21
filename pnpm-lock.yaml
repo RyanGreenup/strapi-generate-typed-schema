@@ -350,28 +350,28 @@ importers:
   apps/strapi-openapi-spec-generator/cli:
     dependencies:
       '@bomb.sh/tab':
-        specifier: 'catalog:'
+        specifier: ^0.0.22
         version: 0.0.22(cac@7.1.0)(citty@0.2.2)(commander@15.1.0)
       '@typescript/native':
-        specifier: 'catalog:'
+        specifier: npm:typescript@^7.0.2
         version: typescript@7.0.2
       ajv:
-        specifier: 'catalog:'
+        specifier: ^8.20.0
         version: 8.20.0
       ajv-formats:
-        specifier: 'catalog:'
+        specifier: ^3.0.1
         version: 3.0.1(ajv@8.20.0)
       citty:
-        specifier: 'catalog:'
+        specifier: ^0.2.2
         version: 0.2.2
       ttsc:
-        specifier: 'catalog:'
+        specifier: ^0.37.1
         version: 0.37.1(typescript@6.0.3)
       typescript:
-        specifier: 'catalog:'
+        specifier: ^6.0.3
         version: 6.0.3
       typia:
-        specifier: 'catalog:'
+        specifier: ^15.4.1
         version: 15.4.1(ttsc@0.37.1(typescript@6.0.3))
     devDependencies:
       '@ryangreenup/oxlint-config':

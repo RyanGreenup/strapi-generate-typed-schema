@@ -13,6 +13,12 @@
       "preferVersion": "highestSemver"
     },
     {
+      "label": "Git installs resolve the CLI's runtime dependencies before pack can expand catalog references.",
+      "packages": ["@ryangreenup/strapi-openapi-spec-generator-cli"],
+      "dependencyTypes": ["prod"],
+      "isIgnored": true
+    },
+    {
       "label": "Every other dependency is declared once in the `catalog` block of pnpm-workspace.yaml and consumed with the `catalog:` protocol.",
       "dependencyTypes": ["prod", "dev"],
       "policy": "catalog",

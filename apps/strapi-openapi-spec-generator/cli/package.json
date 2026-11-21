@@ -32,14 +32,14 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
-    "@bomb.sh/tab": "catalog:",
-    "@typescript/native": "catalog:",
-    "ajv": "catalog:",
-    "ajv-formats": "catalog:",
-    "citty": "catalog:",
-    "ttsc": "catalog:",
-    "typescript": "catalog:",
-    "typia": "catalog:"
+    "@bomb.sh/tab": "^0.0.22",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "citty": "^0.2.2",
+    "ttsc": "^0.37.1",
+    "typescript": "^6.0.3",
+    "typia": "^15.4.1"
   },
   "devDependencies": {
     "@ryangreenup/oxlint-config": "workspace:*",
