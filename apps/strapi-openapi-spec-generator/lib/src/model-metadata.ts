@@ -32,22 +32,23 @@ const SYSTEM_FIELDS: Record<string, true> = {
   __component: true,
 };
 
-const describeField = (model: Model, field: string): ModelField => {
-  if (!Object.hasOwn(model.attributes, field)) {
-    return { kind: Object.hasOwn(SYSTEM_FIELDS, field) ? "scalar" : "unknown" };
-  }
-  const attribute = toRecord(model.attributes[field]);
-  const {
-    type,
-    component,
-    components,
-    target,
-    relation,
-    mappedBy,
-    inversedBy,
-  } = attribute;
+const describeRelation = (attribute: JsonSchema): ModelField => {
+  const { target, relation, mappedBy, inversedBy } = attribute;
+  return typeof target === "string" && typeof relation === "string"
+    ? {
+        kind: "relation",
+        target,
+        relation,
+        ...(typeof mappedBy === "string" && { mappedBy }),
+        ...(typeof inversedBy === "string" && { inversedBy }),
+      }
+    : { kind: "unknown" };
+};
+
+const describeAttribute = (attribute: JsonSchema): ModelField => {
+  const { type, component, components } = attribute;
   switch (type) {
-    case "component":
+    case "component": {
       return typeof component === "string"
         ? {
             kind: type,
@@ -55,26 +56,30 @@ const describeField = (model: Model, field: string): ModelField => {
             repeatable: attribute["repeatable"] === true,
           }
         : { kind: "unknown" };
-    case "dynamiczone":
+    }
+    case "dynamiczone": {
       return isUnknownArray(components) &&
         components.every((uid) => typeof uid === "string")
         ? { kind: type, components }
         : { kind: "unknown" };
-    case "media":
+    }
+    case "media": {
       return { kind: type, multiple: attribute["multiple"] === true };
-    case "relation":
-      return typeof target === "string" && typeof relation === "string"
-        ? {
-            kind: type,
-            target,
-            relation,
-            ...(typeof mappedBy === "string" && { mappedBy }),
-            ...(typeof inversedBy === "string" && { inversedBy }),
-          }
-        : { kind: "unknown" };
-    default:
+    }
+    case "relation": {
+      return describeRelation(attribute);
+    }
+    default: {
       return { kind: typeof type === "string" ? "scalar" : "unknown" };
+    }
   }
+};
+
+const describeField = (model: Model, field: string): ModelField => {
+  if (!Object.hasOwn(model.attributes, field)) {
+    return { kind: Object.hasOwn(SYSTEM_FIELDS, field) ? "scalar" : "unknown" };
+  }
+  return describeAttribute(toRecord(model.attributes[field]));
 };
 
 /** Describe only emitted fields; registration can add fields absent from model JSON. */
@@ -82,12 +87,13 @@ const applyModelMetadata = (
   models: Model[],
   roots: SchemaRoot[],
   schemas: Record<string, JsonSchema>,
-  warnings: string[],
-): void => {
+): string[] => {
+  const warnings: string[] = [];
+  const responseSchemas = { roots, schemas };
   for (const model of models) {
     const descriptions = new Map<string, ModelField>();
     const { uid, kind, localized, draftAndPublish } = model;
-    visitResponseObjects(uid, roots, schemas, (schema) => {
+    visitResponseObjects(uid, responseSchemas, (schema) => {
       const fields = Object.fromEntries(
         Object.keys(toRecord(schema["properties"])).map((field) => {
           let descriptor = descriptions.get(field);
@@ -110,6 +116,7 @@ const applyModelMetadata = (
       };
     });
   }
+  return warnings;
 };
 
 export { applyModelMetadata };

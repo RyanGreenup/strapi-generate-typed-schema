@@ -223,11 +223,13 @@ describe("buildDocument", () => {
   it("marks core find operations with their content type and publication settings", async () => {
     const { document } = await fixtureDocument();
     const marked = Object.entries(document.paths).flatMap(([route, methods]) =>
-      Object.entries(methods).flatMap(([method, operation]) =>
-        Object.hasOwn(operation, "x-strapi-dump")
-          ? [{ route, method, marker: operation["x-strapi-dump"] }]
-          : [],
-      ),
+      Object.entries(methods)
+        .filter(([, operation]) => Object.hasOwn(operation, "x-strapi-dump"))
+        .map(([method, operation]) => ({
+          route,
+          method,
+          marker: operation["x-strapi-dump"],
+        })),
     );
     expect(
       marked.toSorted((left, right) => left.route.localeCompare(right.route)),

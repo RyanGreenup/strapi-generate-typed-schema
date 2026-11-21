@@ -50,11 +50,15 @@ const setRelations = (schema: JsonSchema, relations: JsonSchema): void => {
   }
 };
 
+interface ResponseSchemas {
+  roots: SchemaRoot[];
+  schemas: Record<string, JsonSchema>;
+}
+
 /** Visit a model's concrete response objects, but not their nested property schemas. */
 const visitResponseObjects = (
   uid: string,
-  roots: SchemaRoot[],
-  schemas: Record<string, JsonSchema>,
+  { roots, schemas }: ResponseSchemas,
   visit: (schema: JsonSchema) => void,
 ): void => {
   const seen = new WeakSet<JsonSchema>();
@@ -101,10 +105,11 @@ const applyRelations = (
   roots: SchemaRoot[],
   schemas: Record<string, JsonSchema>,
 ): void => {
+  const responseSchemas = { roots, schemas };
   for (const { uid, attributes } of models) {
     const relations = relationMetadata(attributes);
     if (Object.keys(relations).length > 0) {
-      visitResponseObjects(uid, roots, schemas, (schema) => {
+      visitResponseObjects(uid, responseSchemas, (schema) => {
         setRelations(schema, relations);
       });
     }

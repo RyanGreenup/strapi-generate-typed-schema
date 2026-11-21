@@ -1,9 +1,11 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { parseJsonObject, toRecord } from "../src/json.js";
 import { generatedFixture } from "./generated-fixture.js";
+
+vi.setConfig({ testTimeout: 5000 });
 
 const MODEL = "x-strapi-model";
 
@@ -76,7 +78,7 @@ describe("population metadata on generated responses", () => {
         },
       });
       const fields = toRecord(toRecord(response[MODEL])["fields"]);
-      expect(Object.keys(fields).toSorted()).toEqual(
+      expect(Object.keys(fields).toSorted()).toStrictEqual(
         Object.keys(toRecord(response["properties"])).toSorted(),
       );
     }
@@ -120,8 +122,8 @@ describe("population metadata on generated responses", () => {
     const fields = toRecord(
       toRecord(schema("ApiPagePagePublishedDocument")[MODEL])["fields"],
     );
-    expect(fields["pluginComponent"]).toEqual({ kind: "unknown" });
-    expect(fields["pluginJson"]).toEqual({ kind: "unknown" });
+    expect(fields["pluginComponent"]).toStrictEqual({ kind: "unknown" });
+    expect(fields["pluginJson"]).toStrictEqual({ kind: "unknown" });
     expect(fields).not.toHaveProperty("secret");
     expect(
       fixture.warnings.filter((warning) =>

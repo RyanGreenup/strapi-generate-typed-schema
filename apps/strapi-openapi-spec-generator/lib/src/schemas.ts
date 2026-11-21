@@ -1,6 +1,5 @@
-import type { DiscoveredContentType } from "./content-types.js";
+import type { Compilation } from "./compile-entry.js";
 import type { JsonSchema } from "./document.js";
-import type { QueryEnums } from "./query-parameters.js";
 import type { SchemasInput } from "./work-directory.js";
 
 import { applyAttributeMetadata } from "./attribute-metadata.js";
@@ -29,11 +28,11 @@ import {
 const generateSchemas = async (
   input: Omit<SchemasInput, "components">,
   warnings: string[],
-): Promise<{
-  schemas: Record<string, JsonSchema>;
-  contentTypes: DiscoveredContentType[];
-  queryEnums: QueryEnums;
-}> => {
+): Promise<
+  Pick<Compilation, "contentTypes" | "queryEnums"> & {
+    schemas: Record<string, JsonSchema>;
+  }
+> => {
   const components = await readComponents(input.projectDirectory);
   const project = { ...input, components };
   const extensions = await readExtensions(input.projectDirectory);
@@ -45,8 +44,10 @@ const generateSchemas = async (
   const schemas = renameSchemas(emission.schemas, emission.roots);
   warnings.push(...applyConditions(models, emission.roots, schemas));
   applyRelations(models, emission.roots, schemas);
-  warnings.push(...applyAttributeMetadata(metadata, emission.roots, schemas));
-  applyModelMetadata(models, emission.roots, schemas, warnings);
+  warnings.push(
+    ...applyAttributeMetadata(metadata, emission.roots, schemas),
+    ...applyModelMetadata(models, emission.roots, schemas),
+  );
   const result = publicSchemas(schemas, emission.roots, input.contentTypes);
   validateSchemaRefs(result);
   const unnamed = unnamedSchemas(result);

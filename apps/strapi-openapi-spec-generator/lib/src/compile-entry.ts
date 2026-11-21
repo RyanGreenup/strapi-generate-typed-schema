@@ -90,3 +90,4 @@ const compileProject = async (
 };
 
 export { compileProject };
+export type { Compilation };
