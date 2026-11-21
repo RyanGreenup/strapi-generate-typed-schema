@@ -5,6 +5,7 @@ import path from "node:path";
 import { text } from "node:stream/consumers";
 
 import type { DiscoveredContentType } from "./content-types.js";
+import type { QueryEnums } from "./query-parameters.js";
 import type { Emission } from "./schema-identity.js";
 import type { MetadataModel } from "./stage-declarations.js";
 import type { SchemasInput } from "./work-directory.js";
@@ -53,6 +54,7 @@ interface Compilation {
   emission: Emission;
   contentTypes: DiscoveredContentType[];
   metadata: MetadataModel[];
+  queryEnums: QueryEnums;
 }
 
 /** Run discovery and schema emission against the same staged declarations. */
@@ -68,7 +70,10 @@ const compileProject = async (
       input.cacheDirectory,
       "discovery.ts",
     );
-    const { models, contentTypes } = readDiscovery(input, discovery);
+    const { models, contentTypes, queryEnums } = readDiscovery(
+      input,
+      discovery,
+    );
     await writeSchemaEntry(work, models);
     const emission = readEmission(
       await runEntry(work, input.cacheDirectory, "entry.ts"),
@@ -76,6 +81,7 @@ const compileProject = async (
     return {
       emission,
       contentTypes,
+      queryEnums,
       metadata: metadataModels(declared, models, sources),
     };
   } finally {

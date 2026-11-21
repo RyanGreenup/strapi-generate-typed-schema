@@ -10,6 +10,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 import type { ContentType, DiscoveredContentType } from "./content-types.js";
+import type { QueryEnums } from "./query-parameters.js";
 import type { Model } from "./schema-probes.js";
 
 import { isUnknownArray, parseJsonObject, toRecord } from "./json.js";
@@ -37,7 +38,7 @@ const discoverySource = ({
     return `${literal}: typia.reflect.literals<T.SelectableField<${literal}>>()`;
   });
   return String.raw`import typia from "typia";
-import type { UID } from "@strapi/strapi";
+import type { Modules, UID } from "@strapi/strapi";
 import type * as T from "./rest-types.ts";
 declare const process: { stdout: { write(text: string): void } };
 type Owners = ${owners === "" ? "never" : owners};
@@ -47,7 +48,9 @@ const related = typia.reflect.literals<Related | "">().filter(Boolean);
 const drafts = typia.reflect.literals<T.DraftModels<Related> | "">().filter(Boolean);
 const components = typia.reflect.literals<Extract<External, UID.Component> | "">().filter(Boolean);
 const selectable = { ${selectable.join(",\n")} };
-process.stdout.write("\n" + JSON.stringify({ related, drafts, components, selectable }) + "\n");
+const status = typia.reflect.literals<Modules.Documents.Params.PublicationStatus.Kind>();
+const publicationFilter = typia.reflect.literals<Modules.Documents.Params.PublicationStatus.PublicationFilterMode>();
+process.stdout.write("\n" + JSON.stringify({ related, drafts, components, selectable, status, publicationFilter }) + "\n");
 `;
 };
 
@@ -66,8 +69,25 @@ const stringList = (value: unknown, label: string): string[] => {
 const readDiscovery = (
   { contentTypes, components }: SchemasInput,
   output: string,
-): { models: Model[]; contentTypes: DiscoveredContentType[] } => {
+): {
+  models: Model[];
+  contentTypes: DiscoveredContentType[];
+  queryEnums: QueryEnums;
+} => {
   const discovery = parseJsonObject(output);
+  const enumValues = (name: keyof QueryEnums): string[] => {
+    const values = stringList(discovery[name], name);
+    if (values.length === 0) {
+      throw new Error(
+        `Invalid schema discovery output: empty enum for ${name}`,
+      );
+    }
+    return values;
+  };
+  const queryEnums = {
+    status: enumValues("status"),
+    publicationFilter: enumValues("publicationFilter"),
+  };
   const drafts = new Set(stringList(discovery["drafts"], "drafts"));
   const fields = toRecord(discovery["selectable"]);
   const discovered = contentTypes.map((content) => ({
@@ -93,7 +113,7 @@ const readDiscovery = (
       drafts: true,
     })),
   ];
-  return { models, contentTypes: discovered };
+  return { models, contentTypes: discovered, queryEnums };
 };
 
 /** Write literal schema probes for the source models and their discovered populated targets. */

@@ -1,5 +1,6 @@
 import type { DiscoveredContentType } from "./content-types.js";
 import type { JsonSchema } from "./document.js";
+import type { QueryEnums } from "./query-parameters.js";
 import type { SchemasInput } from "./work-directory.js";
 
 import { applyAttributeMetadata } from "./attribute-metadata.js";
@@ -30,12 +31,13 @@ const generateSchemas = async (
 ): Promise<{
   schemas: Record<string, JsonSchema>;
   contentTypes: DiscoveredContentType[];
+  queryEnums: QueryEnums;
 }> => {
   const components = await readComponents(input.projectDirectory);
   const project = { ...input, components };
   const extensions = await readExtensions(input.projectDirectory);
   const models = [...input.contentTypes, ...components, ...extensions];
-  const { emission, contentTypes, metadata } = await compileProject(
+  const { emission, contentTypes, metadata, queryEnums } = await compileProject(
     project,
     models,
   );
@@ -51,7 +53,7 @@ const generateSchemas = async (
       `Schemas kept typia's generated names because no model role covers them: ${unnamed.join(", ")}`,
     );
   }
-  return { schemas: result, contentTypes };
+  return { schemas: result, contentTypes, queryEnums };
 };
 
 export { generateSchemas };

@@ -13,14 +13,28 @@ import type {
 import { readContentTypes } from "../src/content-types.js";
 import { buildDocument } from "../src/document.js";
 import { generateSpecification } from "../src/index.js";
-import { toRecord } from "../src/json.js";
+import { isUnknownArray, toRecord } from "../src/json.js";
 import { readRoutes } from "../src/routes.js";
 import { renameSchemas, validateSchemaRefs } from "../src/schema-names.js";
+import { readDiscovery } from "../src/work-directory.js";
 import { generatedFixture } from "./generated-fixture.js";
 
 vi.setConfig({ testTimeout: 5000 });
 
 const project = fileURLToPath(new URL("fixtures/project", import.meta.url));
+const queryEnums = {
+  status: ["draft", "published"],
+  publicationFilter: [
+    "never-published",
+    "has-published-version",
+    "modified",
+    "unmodified",
+    "never-published-document",
+    "has-published-version-document",
+    "published-without-draft",
+    "published-with-draft",
+  ],
+};
 
 /**
  * Build the document of the fixture project with empty schemas.
@@ -34,6 +48,7 @@ const fixtureDocument = async (): Promise<{
   const contentTypes = await readContentTypes(project);
   const { routes, warnings } = await readRoutes(project, contentTypes);
   const document = buildDocument({
+    queryEnums,
     contentTypes: contentTypes.map((model) => ({
       ...model,
       selectableFields: ["id", "documentId"],
@@ -184,6 +199,7 @@ describe("buildDocument", () => {
     async (action) => {
       const handler = `api::article.article.${action}`;
       const { paths } = buildDocument({
+        queryEnums,
         contentTypes: (await readContentTypes(project)).map((model) => ({
           ...model,
           selectableFields: ["id", "documentId"],
@@ -519,6 +535,29 @@ describe("renameSchemas", () => {
   });
 });
 
+it.each(["status", "publicationFilter"])(
+  "rejects an empty %s discovery enum",
+  (name) => {
+    const input = {
+      components: [],
+      contentTypes: [],
+      cacheDirectory: project,
+      projectDirectory: project,
+    };
+    const output = {
+      related: [],
+      components: [],
+      drafts: [],
+      selectable: {},
+      ...queryEnums,
+      [name]: [],
+    };
+    expect(() => readDiscovery(input, JSON.stringify(output))).toThrow(
+      `empty enum for ${name}`,
+    );
+  },
+);
+
 describe("generateSpecification", () => {
   it("rejects a directory that is not a project", async () => {
     await expect(
@@ -539,6 +578,44 @@ describe("generateSpecification", () => {
 describe("generated response validation", () => {
   const fixture = generatedFixture();
   const { compileSchema, validateDocument, validateQuery } = fixture;
+
+  it("reflects the installed publication enums independently for each generation", async () => {
+    const { document: second } = await generateSpecification({
+      projectDirectory: fixture.directory!,
+    });
+    const enumFor = (document: OpenApiDocument, name: string) => {
+      const parameters = document.paths["/articles"]?.["get"]?.["parameters"];
+      const parameter = isUnknownArray(parameters)
+        ? parameters.find((value) => toRecord(value)["name"] === name)
+        : undefined;
+      return toRecord(toRecord(parameter)["schema"])["enum"];
+    };
+    for (const [name, expected] of Object.entries(queryEnums)) {
+      const values = enumFor(fixture.document!, name);
+      expect(isUnknownArray(values) && values.toSorted()).toEqual(
+        expected.toSorted(),
+      );
+      const repeated = enumFor(second, name);
+      expect(repeated).toEqual(values);
+      expect(repeated).not.toBe(values);
+      expect(parameterNames(second.paths["/pages"]?.["get"])).not.toContain(
+        name,
+      );
+    }
+  }, 600_000);
+
+  it("retains referenced published schemas for populated targets", () => {
+    const schemas = fixture.document!.components.schemas;
+    for (const name of [
+      "PluginUploadFilePublishedDocument",
+      "ApiPagePagePublishedDocument",
+      "SharedSeoPublishedDocument",
+      "SharedConditionalLinkPublishedDocument",
+    ]) {
+      expect(schemas).toHaveProperty(name);
+    }
+    validateSchemaRefs(schemas);
+  });
 
   it("validates core query pagination without mixing page and offset keys", () => {
     const accepts = validateQuery("/articles", "pagination");

@@ -1,6 +1,11 @@
 /** One OpenAPI parameter object. */
 type Parameter = Record<string, unknown>;
 
+interface QueryEnums {
+  status: string[];
+  publicationFilter: string[];
+}
+
 type QueryName =
   | "fields"
   | "filters"
@@ -40,7 +45,9 @@ const query = (
 ): Parameter => ({ description, in: "query", name, ...options });
 
 /** Query descriptors for Strapi's core REST actions. */
-const QUERY_PARAMETERS: Record<QueryName, Parameter> = {
+const createQueryParameters = (
+  enums: QueryEnums,
+): Record<QueryName, Parameter> => ({
   fields: query(
     "fields",
     "Select declared public fields. Use '*' alone for unrestricted selection; do not rely on a mixed wildcard list to narrow the response. Runtime-only privacy settings are not reflected.",
@@ -85,19 +92,7 @@ const QUERY_PARAMETERS: Record<QueryName, Parameter> = {
     schema: { anyOf: [stringSchema, stringList, { type: "object" }] },
   }),
   publicationFilter: query("publicationFilter", "Derived publication cohort", {
-    schema: {
-      enum: [
-        "never-published",
-        "has-published-version",
-        "modified",
-        "unmodified",
-        "never-published-document",
-        "has-published-version-document",
-        "published-without-draft",
-        "published-with-draft",
-      ],
-      type: "string",
-    },
+    schema: { enum: enums.publicationFilter, type: "string" },
   }),
   search: query("_q", "Full-text search"),
   sort: query("sort", "Sort the result", {
@@ -111,9 +106,9 @@ const QUERY_PARAMETERS: Record<QueryName, Parameter> = {
     },
   }),
   status: query("status", "Document status, defaults to published", {
-    schema: { enum: ["draft", "published"], type: "string" },
+    schema: { enum: enums.status, type: "string" },
   }),
-};
+});
 
-export { QUERY_PARAMETERS };
-export type { Parameter };
+export { createQueryParameters };
+export type { Parameter, QueryEnums, QueryName };

@@ -1,9 +1,9 @@
 import type { DiscoveredContentType } from "./content-types.js";
-import type { Parameter } from "./query-parameters.js";
+import type { Parameter, QueryEnums, QueryName } from "./query-parameters.js";
 import type { CoreAction, Route } from "./routes.js";
 
 import { ERROR_SCHEMA, schemaNames } from "./names.js";
-import { QUERY_PARAMETERS as query } from "./query-parameters.js";
+import { createQueryParameters } from "./query-parameters.js";
 
 type JsonSchema = Record<string, unknown>;
 
@@ -28,6 +28,7 @@ interface DocumentInfo {
 
 interface DocumentInput {
   contentTypes: DiscoveredContentType[];
+  queryEnums: QueryEnums;
   info: DocumentInfo;
   routes: Route[];
   schemas: Record<string, JsonSchema>;
@@ -36,14 +37,14 @@ interface DocumentInput {
 
 interface ActionSpec {
   notFound?: true;
-  query: Parameter[];
+  query: QueryName[];
   request?: "create" | "update";
   response?: "list" | "one";
   summary: string;
 }
 
-const fields = [query.fields, query.populate];
-const filtered = [...fields, query.filters];
+const fields: QueryName[] = ["fields", "populate"];
+const filtered: QueryName[] = [...fields, "filters"];
 
 // Strapi returns 204 for a missing delete target. Single-type updates can create.
 const COLLECTION_ACTIONS: Record<CoreAction, ActionSpec> = {
@@ -55,20 +56,13 @@ const COLLECTION_ACTIONS: Record<CoreAction, ActionSpec> = {
   },
   delete: { query: filtered, summary: "Delete one %s" },
   find: {
-    query: [
-      query.fields,
-      query.filters,
-      query.search,
-      query.pagination,
-      query.sort,
-      query.populate,
-    ],
+    query: ["fields", "filters", "search", "pagination", "sort", "populate"],
     response: "list",
     summary: "List %s entries",
   },
   findOne: {
     notFound: true,
-    query: [...filtered, query.sort],
+    query: [...filtered, "sort"],
     response: "one",
     summary: "Get one %s",
   },
@@ -115,7 +109,10 @@ const errorResponse = (description: string): JsonSchema => ({
   description,
 });
 
-const fieldsParameter = (model: DiscoveredContentType): Parameter => {
+const fieldsParameter = (
+  model: DiscoveredContentType,
+  base: Parameter,
+): Parameter => {
   const alternatives = ["\\*"];
   for (const name of model.selectableFields) {
     alternatives.push(name.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
@@ -126,13 +123,14 @@ const fieldsParameter = (model: DiscoveredContentType): Parameter => {
     type: "string",
   };
   return {
-    ...query.fields,
+    ...base,
     schema: { anyOf: [item, { items: item, type: "array" }] },
   };
 };
 
 const routeParameters = (
   routePath: string,
+  query: Record<QueryName, Parameter>,
   core?: CoreHandler,
 ): Parameter[] => {
   const parameters: Parameter[] = [];
@@ -151,10 +149,10 @@ const routeParameters = (
   }
   if (core !== undefined) {
     parameters.push(
-      ...core.spec.query.map((parameter) =>
-        parameter === query.fields
-          ? fieldsParameter(core.contentType)
-          : parameter,
+      ...core.spec.query.map((name) =>
+        name === "fields"
+          ? fieldsParameter(core.contentType, query.fields)
+          : query[name],
       ),
     );
     if (core.contentType.localized) {
@@ -218,11 +216,12 @@ const buildOperation = (
   route: Route,
   path: string,
   contentTypes: DiscoveredContentType[],
+  query: Record<QueryName, Parameter>,
 ): Operation => {
   const core = findCoreAction(route, contentTypes);
   const common = {
     operationId: `${route.method} ${path}`,
-    parameters: routeParameters(route.path, core),
+    parameters: routeParameters(route.path, query, core),
   };
   const responses: Record<string, JsonSchema> = route.auth
     ? {
@@ -270,6 +269,7 @@ const buildOperation = (
 /** Builds the OpenAPI content API from extracted routes, content types and schemas. */
 const buildDocument = (input: DocumentInput): OpenApiDocument => {
   const paths: OpenApiDocument["paths"] = {};
+  const query = createQueryParameters(input.queryEnums);
   for (const route of input.routes) {
     const key = route.path.replaceAll(
       /:(?<name>\w+)(?:\([^)]*\))?/gu,
@@ -277,7 +277,7 @@ const buildDocument = (input: DocumentInput): OpenApiDocument => {
     );
     paths[key] = {
       ...paths[key],
-      [route.method]: buildOperation(route, key, input.contentTypes),
+      [route.method]: buildOperation(route, key, input.contentTypes, query),
     };
   }
 

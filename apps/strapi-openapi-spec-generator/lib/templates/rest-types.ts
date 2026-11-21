@@ -226,21 +226,9 @@ type RelatedDocument<T extends UID.ContentType, Published extends boolean> =
 /** Follow only attributes that can actually be populated in a response, including cycles. */
 type TargetOf<A> = A extends Hidden
   ? never
-  : A extends { type: "relation"; target: infer T extends UID.ContentType }
-    ? T
-    : A extends { type: "media" }
-      ? "plugin::upload.file"
-      : A extends {
-            type: "component";
-            component: infer C extends UID.Component;
-          }
-        ? C
-        : A extends {
-              type: "dynamiczone";
-              components: readonly (infer C extends UID.Component)[];
-            }
-          ? C
-          : never;
+  : A extends Schema.Attribute.AnyAttribute
+    ? Schema.Attribute.Target<A> | Schema.Attribute.MorphTargets<A>
+    : never;
 
 type Targets<U extends UID.Schema> = U extends UID.Schema
   ? TargetOf<Attrs<U>[keyof Attrs<U>]>
