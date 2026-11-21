@@ -17,31 +17,54 @@ const regexTypes: Record<string, true> = {
 // even a pattern legal in both, such as ^..$, changes meaning on astral text.
 // Accept ordinary ASCII literals/classes, grouping, repetition and anchors.
 // Never turn a different or invalid expression into an enforceable constraint.
-const portablePattern = (source: string): boolean => {
-  if (/[^\x20-\x7e]/u.test(source)) return false;
+const isPortableEscape = (escaped: string | undefined): boolean =>
+  escaped !== undefined &&
+  String.raw`dswfnrtvx^$\.*+?()[]{}|/-`.includes(escaped);
+
+const isPortableOutsideClass = (
+  source: string,
+  i: number,
+  char: string | undefined,
+): boolean => {
+  if (char === "[") {
+    return source[i + 1] !== "^";
+  }
+  if (char === "(") {
+    return source[i + 1] !== "?" || source[i + 2] === ":";
+  }
+  return char !== ".";
+};
+
+const hasPortableTokens = (source: string): boolean => {
   let inClass = false;
-  for (let i = 0; i < source.length; i++) {
+  for (let i = 0; i < source.length; i += 1) {
     const char = source[i];
     if (char === "\\") {
-      const escaped = source[++i];
-      if (!escaped || !"dswfnrtvx^$\\.*+?()[]{}|/-".includes(escaped))
+      i += 1;
+      if (!isPortableEscape(source[i])) {
         return false;
+      }
     } else if (inClass) {
-      if (char === "]") inClass = false;
-    } else if (char === "[") {
-      if (source[i + 1] === "^") return false;
-      inClass = true;
-    } else if (
-      char === "." ||
-      (source.startsWith("(?", i) && !source.startsWith("(?:", i))
-    ) {
+      inClass = char !== "]";
+    } else if (isPortableOutsideClass(source, i, char)) {
+      inClass = char === "[";
+    } else {
       return false;
     }
   }
+  return true;
+};
+
+const portablePattern = (source: string): boolean => {
+  if (/[^\u0020-\u007E]/u.test(source) || !hasPortableTokens(source)) {
+    return false;
+  }
   try {
     // Compile only; generation never runs project-supplied regular expressions.
-    void new RegExp(source);
-    void new RegExp(source, "u");
+    // oxlint-disable-next-line eslint/no-new, eslint/require-unicode-regexp -- Compile in Strapi's legacy mode.
+    new RegExp(source);
+    // oxlint-disable-next-line eslint/no-new -- Compile in JSON Schema's Unicode mode.
+    new RegExp(source, "u");
     return true;
   } catch {
     return false;
@@ -66,12 +89,13 @@ const writeRegex = (attribute: JsonSchema): WriteRegex | undefined => {
     // An empty expression matches all strings. A UID still gets its fallback.
     return undefined;
   }
+  const isRequired = Boolean(required);
   return {
     source: regex,
     portable: typeof regex === "string" && portablePattern(regex),
     // UID runs a second matches() without excludeEmptyString. Published email
     // also has email().min(1), already represented by its email format.
-    skipEmpty: !required && type !== "uid" && type !== "email",
+    skipEmpty: !isRequired && type !== "uid" && type !== "email",
     replaceUidFallback: type === "uid" && Boolean(regex),
   };
 };
@@ -82,9 +106,15 @@ const applyWriteRegex = (child: JsonSchema, rule: WriteRegex): JsonSchema => {
       copy: true,
       visit: (node) => {
         // In particular, never restore validation to a hidden field's relaxed {}.
-        if (node["type"] !== "string") return;
-        if (rule.replaceUidFallback) Reflect.deleteProperty(node, "pattern");
-        if (!rule.portable) return;
+        if (node["type"] !== "string") {
+          return;
+        }
+        if (rule.replaceUidFallback) {
+          Reflect.deleteProperty(node, "pattern");
+        }
+        if (!rule.portable) {
+          return;
+        }
         if (rule.skipEmpty) {
           node["anyOf"] = [{ const: "" }, { pattern: rule.source }];
         } else {
@@ -93,7 +123,9 @@ const applyWriteRegex = (child: JsonSchema, rule: WriteRegex): JsonSchema => {
       },
     }),
   );
-  if (!rule.portable) result["x-strapi-regex"] = rule.source;
+  if (!rule.portable) {
+    result["x-strapi-regex"] = rule.source;
+  }
   return result;
 };
 

@@ -74,7 +74,7 @@ export const generatedFixture = (
       const parameter = isUnknownArray(parameters)
         ? parameters.find((value) => toRecord(value)["name"] === name)
         : undefined;
-      const schema = toRecord(parameter)["schema"];
+      const { schema } = toRecord(parameter);
       if (schema === undefined) {
         throw new Error(`No ${name} schema for ${route}`);
       }

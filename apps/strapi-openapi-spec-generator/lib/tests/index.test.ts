@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,10 +50,9 @@ const fixtureDocument = async (): Promise<{
   const { routes, warnings } = await readRoutes(project, contentTypes);
   const document = buildDocument({
     queryEnums,
-    contentTypes: contentTypes.map((model) => ({
-      ...model,
-      selectableFields: ["id", "documentId"],
-    })),
+    contentTypes: contentTypes.map((model) =>
+      Object.assign(model, { selectableFields: ["id", "documentId"] }),
+    ),
     info: { title: "fixture", version: "1.0.0" },
     routes,
     schemas: {},
@@ -198,12 +198,12 @@ describe("buildDocument", () => {
     "describes %s as a custom handler",
     async (action) => {
       const handler = `api::article.article.${action}`;
+      const contentTypes = await readContentTypes(project);
       const { paths } = buildDocument({
         queryEnums,
-        contentTypes: (await readContentTypes(project)).map((model) => ({
-          ...model,
-          selectableFields: ["id", "documentId"],
-        })),
+        contentTypes: contentTypes.map((model) =>
+          Object.assign(model, { selectableFields: ["id", "documentId"] }),
+        ),
         info: { title: "fixture", version: "1" },
         routes: [{ auth: false, handler, method: "get", path: "/custom" }],
         schemas: {},
@@ -535,28 +535,30 @@ describe("renameSchemas", () => {
   });
 });
 
-it.each(["status", "publicationFilter"])(
-  "rejects an empty %s discovery enum",
-  (name) => {
-    const input = {
-      components: [],
-      contentTypes: [],
-      cacheDirectory: project,
-      projectDirectory: project,
-    };
-    const output = {
-      related: [],
-      components: [],
-      drafts: [],
-      selectable: {},
-      ...queryEnums,
-      [name]: [],
-    };
-    expect(() => readDiscovery(input, JSON.stringify(output))).toThrow(
-      `empty enum for ${name}`,
-    );
-  },
-);
+describe("readDiscovery", () => {
+  it.each(["status", "publicationFilter"])(
+    "rejects an empty %s enum",
+    (name) => {
+      const input = {
+        components: [],
+        contentTypes: [],
+        cacheDirectory: project,
+        projectDirectory: project,
+      };
+      const output = {
+        related: [],
+        components: [],
+        drafts: [],
+        selectable: {},
+        ...queryEnums,
+        [name]: [],
+      };
+      expect(() => readDiscovery(input, JSON.stringify(output))).toThrow(
+        `empty enum for ${name}`,
+      );
+    },
+  );
+});
 
 describe("generateSpecification", () => {
   it("rejects a directory that is not a project", async () => {
@@ -574,52 +576,56 @@ describe("generateSpecification", () => {
   });
 });
 
-/* oxlint-disable unicorn/no-null -- JSON responses distinguish null from omitted fields. */
-describe("generated response validation", () => {
+const publicationEnum = (
+  document: OpenApiDocument,
+  name: string,
+): unknown[] => {
+  const { parameters } = toRecord(document.paths["/articles"]?.["get"]);
+  assert.ok(isUnknownArray(parameters));
+  const parameter = parameters.find(
+    (value) => toRecord(value)["name"] === name,
+  );
+  const { enum: values } = toRecord(toRecord(parameter)["schema"]);
+  assert.ok(isUnknownArray(values));
+  return values;
+};
+
+const requestBodySchema = (operation: Operation | undefined): JsonSchema => {
+  const content = toRecord(toRecord(operation?.["requestBody"])["content"]);
+  return toRecord(toRecord(content["application/json"])["schema"]);
+};
+
+// oxlint-disable-next-line unicorn/no-null -- JSON payloads distinguish null from omitted fields.
+const jsonNull = null;
+
+describe("generated specification validation", () => {
   const fixture = generatedFixture();
   const { compileSchema, validateDocument, validateQuery } = fixture;
+  const generatedDocument = (): OpenApiDocument => {
+    const { document } = fixture;
+    assert.ok(document !== undefined);
+    return document;
+  };
 
-  it("reflects the installed publication enums independently for each generation", async () => {
-    const { document: second } = await generateSpecification({
-      projectDirectory: fixture.directory!,
-    });
-    const enumFor = (document: OpenApiDocument, name: string) => {
-      const parameters = document.paths["/articles"]?.["get"]?.["parameters"];
-      const parameter = isUnknownArray(parameters)
-        ? parameters.find((value) => toRecord(value)["name"] === name)
-        : undefined;
-      return toRecord(toRecord(parameter)["schema"])["enum"];
-    };
-    for (const [name, expected] of Object.entries(queryEnums)) {
-      const values = enumFor(fixture.document!, name);
-      expect(isUnknownArray(values) && values.toSorted()).toEqual(
-        expected.toSorted(),
-      );
-      const repeated = enumFor(second, name);
-      expect(repeated).toEqual(values);
-      expect(repeated).not.toBe(values);
-      expect(parameterNames(second.paths["/pages"]?.["get"])).not.toContain(
-        name,
-      );
-    }
-  }, 600_000);
+  describe("query parameters", () => {
+    it("reflects the installed publication enums on every generation", async () => {
+      const { directory } = fixture;
+      assert.ok(directory !== undefined);
+      const { document: second } = await generateSpecification({
+        projectDirectory: directory,
+      });
+      for (const [name, expected] of Object.entries(queryEnums)) {
+        const values = publicationEnum(generatedDocument(), name);
+        expect(values).toHaveLength(expected.length);
+        expect(values).toStrictEqual(expect.arrayContaining(expected));
+        expect(publicationEnum(second, name)).toStrictEqual(values);
+        expect(parameterNames(second.paths["/pages"]?.["get"])).not.toContain(
+          name,
+        );
+      }
+    }, 600_000);
 
-  it("retains referenced published schemas for populated targets", () => {
-    const schemas = fixture.document!.components.schemas;
-    for (const name of [
-      "PluginUploadFilePublishedDocument",
-      "ApiPagePagePublishedDocument",
-      "SharedSeoPublishedDocument",
-      "SharedConditionalLinkPublishedDocument",
-    ]) {
-      expect(schemas).toHaveProperty(name);
-    }
-    validateSchemaRefs(schemas);
-  });
-
-  it("validates core query pagination without mixing page and offset keys", () => {
-    const accepts = validateQuery("/articles", "pagination");
-    for (const value of [
+    it.each([
       {},
       { withCount: true },
       { page: 1 },
@@ -629,10 +635,11 @@ describe("generated response validation", () => {
       { start: 0, limit: 3 },
       { limit: -1 },
       { limit: 0 },
-    ]) {
-      expect(accepts(value), JSON.stringify(value)).toBe(true);
-    }
-    for (const value of [
+    ])("accepts article pagination %j", (value) => {
+      expect(validateQuery("/articles", "pagination")(value)).toBe(true);
+    });
+
+    it.each([
       { page: 1, start: 0 },
       { page: 1, limit: 3 },
       { pageSize: 3, start: 0 },
@@ -642,109 +649,47 @@ describe("generated response validation", () => {
       { start: -1 },
       { limit: -2 },
       { limit: 1.5 },
-    ]) {
-      expect(accepts(value), JSON.stringify(value)).toBe(false);
-    }
-  });
+    ])("rejects article pagination %j", (value) => {
+      expect(validateQuery("/articles", "pagination")(value)).toBe(false);
+    });
 
-  it("preserves source metadata by model, property and input role", () => {
-    const schemas = fixture.document!.components.schemas;
-    for (const suffix of [
-      "PublishedDocument",
-      "PublishedCreateInput",
-      "DraftUpdateInput",
-    ]) {
-      const properties = toRecord(
-        schemas[`ApiArticleArticle${suffix}`]?.["properties"],
-      );
-      expect(properties["title"]).toHaveProperty("x-strapi-unique", true);
-      expect(properties["cover"]).toHaveProperty("x-strapi-allowed-types", [
-        "images",
-      ]);
-      if (suffix === "PublishedDocument") {
-        expect(properties["rating"]).not.toHaveProperty(
-          "x-strapi-coerces-numeric-string",
-        );
-      } else {
-        expect(properties["rating"]).toMatchObject({
-          "x-strapi-coerces-numeric-string": true,
-          "x-strapi-configured-bounds": { minimum: 2, maximum: 8 },
-        });
-      }
-    }
-    for (const suffix of [
-      "PublishedCreateEntryInput",
-      "DraftCreateBlockInput",
-    ]) {
-      const schema = schemas[`SharedConditionalLink${suffix}`];
-      expect(schema).toMatchObject({
-        properties: {
-          active: { default: false },
-          weight: { default: 0, "x-strapi-coerces-numeric-string": true },
-          attachment: { "x-strapi-allowed-types": ["images", "files"] },
-          url: { "x-strapi-unique": true },
-        },
-        allOf: expect.arrayContaining([
-          expect.objectContaining({
-            then: {
-              properties: {
-                url: expect.objectContaining({ "x-strapi-unique": true }),
-              },
-              ...(suffix.startsWith("Published") ? { required: ["url"] } : {}),
-            },
-          }),
-        ]),
-      });
-      expect(toRecord(schema?.["properties"])["weight"]).not.toHaveProperty(
-        "x-strapi-configured-bounds",
-      );
-    }
-    expect(
-      toRecord(schemas["ApiPagePagePublishedDocument"]?.["properties"])[
-        "title"
-      ],
-    ).not.toHaveProperty("x-strapi-unique");
-  });
+    it.each([
+      { fields: "*" },
+      { fields: "  title, slug , publishedAt  " },
+      { fields: "*,title" },
+      { fields: ["title,*", "slug"] },
+      { fields: ["*", "email"] },
+      { fields: ["id, documentId", "createdAt", "updatedAt"] },
+    ])("accepts selectable article fields $fields", ({ fields }) => {
+      expect(validateQuery("/articles", "fields")(fields)).toBe(true);
+    });
 
-  it("validates each model's selectable attributes, including declaration-only fields", () => {
-    const article = validateQuery("/articles", "fields");
-    const page = validateQuery("/pages", "fields");
-    for (const fields of [
-      "*",
-      "  title, slug , publishedAt  ",
-      "*,title",
-      ["title,*", "slug"],
-      ["*", "email"],
-      ["id, documentId", "createdAt", "updatedAt"],
-    ]) {
-      expect(article(fields), JSON.stringify(fields)).toBe(true);
-    }
-    for (const fields of [
-      "",
-      "title,",
-      "*,notAField",
-      "notAField",
-      "locale",
-      "page",
-      "seo",
-      "cover",
-      "blocks",
-      ["title", "plugin$date"],
-      "pluginJson",
-      ["id", "unknown"],
-      { title: true },
-    ]) {
-      expect(article(fields), JSON.stringify(fields)).toBe(false);
-    }
-    for (const field of [
-      "plugin$date",
-      "pluginJson",
-      "locale,title",
-      "publishedAt",
-    ]) {
-      expect(page(field), field).toBe(true);
-    }
-    for (const field of [
+    it.each([
+      { fields: "" },
+      { fields: "title," },
+      { fields: "*,notAField" },
+      { fields: "notAField" },
+      { fields: "locale" },
+      { fields: "page" },
+      { fields: "seo" },
+      { fields: "cover" },
+      { fields: "blocks" },
+      { fields: ["title", "plugin$date"] },
+      { fields: "pluginJson" },
+      { fields: ["id", "unknown"] },
+      { fields: { title: true } },
+    ])("rejects invalid selections of article fields $fields", ({ fields }) => {
+      expect(validateQuery("/articles", "fields")(fields)).toBe(false);
+    });
+
+    it.each(["plugin$date", "pluginJson", "locale,title", "publishedAt"])(
+      "accepts selectable page fields %s",
+      (fields) => {
+        expect(validateQuery("/pages", "fields")(fields)).toBe(true);
+      },
+    );
+
+    it.each([
       "slug",
       "editorNote",
       "passcode",
@@ -753,465 +698,627 @@ describe("generated response validation", () => {
       "pluginPassword",
       "pluginPrivate",
       "createdBy",
-    ]) {
-      expect(page(field), field).toBe(false);
-    }
+    ])("rejects nonselectable page fields %s", (fields) => {
+      expect(validateQuery("/pages", "fields")(fields)).toBe(false);
+    });
+
+    it("allows a wildcard when every field is private", () => {
+      expect(validateQuery("/site-setting", "fields")("*")).toBe(true);
+    });
+
+    it.each([
+      { fields: "" },
+      { fields: "*," },
+      { fields: ["*,"] },
+      { fields: "siteName" },
+      { fields: "id" },
+      { fields: "documentId" },
+    ])("rejects private or empty site-setting fields $fields", ({ fields }) => {
+      expect(validateQuery("/site-setting", "fields")(fields)).toBe(false);
+    });
   });
 
-  it("allows wildcard tokens but not empty tokens when every field is private", () => {
-    const accepts = validateQuery("/site-setting", "fields");
-    expect(accepts("*")).toBe(true);
-    for (const fields of ["", "*,", ["*,"], "siteName", "id", "documentId"]) {
-      expect(accepts(fields), JSON.stringify(fields)).toBe(false);
-    }
+  describe("schema metadata", () => {
+    it("retains referenced published schemas for populated targets", () => {
+      const {
+        components: { schemas },
+      } = generatedDocument();
+      for (const name of [
+        "PluginUploadFilePublishedDocument",
+        "ApiPagePagePublishedDocument",
+        "SharedSeoPublishedDocument",
+        "SharedConditionalLinkPublishedDocument",
+      ]) {
+        expect(schemas).toHaveProperty(name);
+      }
+      validateSchemaRefs(schemas);
+    });
+
+    it.each(["PublishedDocument", "PublishedCreateInput", "DraftUpdateInput"])(
+      "preserves article uniqueness and media metadata for %s",
+      (suffix) => {
+        const { schemas } = generatedDocument().components;
+        expect(schemas[`ApiArticleArticle${suffix}`]).toMatchObject({
+          properties: {
+            title: { "x-strapi-unique": true },
+            cover: { "x-strapi-allowed-types": ["images"] },
+          },
+        });
+      },
+    );
+
+    it.each(["PublishedCreateInput", "DraftUpdateInput"])(
+      "describes numeric coercion and configured bounds for article %s",
+      (suffix) => {
+        const { schemas } = generatedDocument().components;
+        expect(schemas[`ApiArticleArticle${suffix}`]).toMatchObject({
+          properties: {
+            rating: {
+              "x-strapi-coerces-numeric-string": true,
+              "x-strapi-configured-bounds": { minimum: 2, maximum: 8 },
+            },
+          },
+        });
+      },
+    );
+
+    it("does not annotate response numeric coercion or infer uniqueness from another model", () => {
+      const { schemas } = generatedDocument().components;
+      const article = toRecord(
+        schemas["ApiArticleArticlePublishedDocument"]?.["properties"],
+      );
+      const page = toRecord(
+        schemas["ApiPagePagePublishedDocument"]?.["properties"],
+      );
+      expect(article["rating"]).not.toHaveProperty(
+        "x-strapi-coerces-numeric-string",
+      );
+      expect(page["title"]).not.toHaveProperty("x-strapi-unique");
+    });
+
+    it.each([
+      ["PublishedCreateEntryInput", { required: ["url"] }],
+      ["DraftCreateBlockInput", {}],
+    ] as const)(
+      "preserves conditional component metadata for %s",
+      (suffix, constraints) => {
+        const { schemas } = generatedDocument().components;
+        const schema = schemas[`SharedConditionalLink${suffix}`];
+        expect(schema).toMatchObject({
+          properties: {
+            active: { default: false },
+            weight: { default: 0, "x-strapi-coerces-numeric-string": true },
+            attachment: { "x-strapi-allowed-types": ["images", "files"] },
+            url: { "x-strapi-unique": true },
+          },
+        });
+        const { allOf, properties } = toRecord(schema);
+        assert.ok(isUnknownArray(allOf));
+        const conditionalBranches = allOf.map(
+          (branch) => toRecord(branch)["then"],
+        );
+        const uniqueUrl: unknown = expect.objectContaining({
+          "x-strapi-unique": true,
+        });
+        expect(conditionalBranches).toContainEqual({
+          properties: { url: uniqueUrl },
+          ...constraints,
+        });
+        expect(toRecord(properties)["weight"]).not.toHaveProperty(
+          "x-strapi-configured-bounds",
+        );
+      },
+    );
+
+    it("omits unsupported single-type aliases", () => {
+      expect(fixture.document?.components.schemas).not.toHaveProperty(
+        "ApiSiteSettingSiteSettingListResponse",
+      );
+      expect(fixture.document?.components.schemas).not.toHaveProperty(
+        "ApiSiteSettingSiteSettingCreateRequest",
+      );
+    });
   });
 
-  const published = {
-    id: 1,
-    documentId: "fixture",
-    publishedAt: "2026-11-17T00:00:00.000Z",
-  };
-  const draftEntry = { ...published, publishedAt: null };
-
-  it("validates published writes by default and incomplete writes for explicit drafts", () => {
-    for (const [route, method] of [
+  describe("request validation", () => {
+    it.each([
       ["/articles", "post"],
       ["/articles/{id}", "put"],
-    ] as const) {
-      const operation = fixture.document?.paths[route]?.[method];
-      const content = toRecord(toRecord(operation?.["requestBody"])["content"]);
-      const schema = toRecord(toRecord(content["application/json"])["schema"]);
-      expect(compileSchema(schema)({ data: { title: null } })).toBe(false);
-      if (method === "post")
-        expect(compileSchema(schema)({ data: {} })).toBe(false);
-      const status = toRecord(operation?.["x-strapi-request-status"]);
-      const validate = compileSchema(
-        toRecord(toRecord(status["schemas"])["draft"]),
+    ] as const)(
+      "validates published writes by default and incomplete drafts for %s %s",
+      (route, method) => {
+        const operation = generatedDocument().paths[route]?.[method];
+        const validatePublished = compileSchema(requestBodySchema(operation));
+        expect(validatePublished({ data: { title: jsonNull } })).toBe(false);
+        const status = toRecord(operation?.["x-strapi-request-status"]);
+        const validate = compileSchema(
+          toRecord(toRecord(status["schemas"])["draft"]),
+        );
+        expect(
+          validate({
+            data: { seo: [], title: jsonNull, email: "invalid", rating: -1 },
+          }),
+        ).toBe(true);
+        expect(validate({ data: { seo: [], title: "12345678901" } })).toBe(
+          false,
+        );
+      },
+    );
+
+    it("requires data fields for a create that defaults to published", () => {
+      const operation = generatedDocument().paths["/articles"]?.["post"];
+      const validate = compileSchema(requestBodySchema(operation));
+      expect(validate({ data: {} })).toBe(false);
+    });
+
+    it("accepts numeric strings on create in both states", () => {
+      const data = {
+        title: "12345",
+        email: "a@b.co",
+        seo: [{ heading: "SEO" }],
+      };
+      for (const state of ["Published", "Draft"]) {
+        const validate = validateDocument(
+          `ApiArticleArticle${state}CreateRequest`,
+        );
+        expect(
+          validate({ data: { ...data, price: "12.34", rating: "3" } }),
+        ).toBe(true);
+        expect(validate({ data: { ...data, rating: "abc" } })).toBe(false);
+      }
+    });
+
+    it("exposes publication-specific create constraints without requiring defaulted or relational attributes", () => {
+      const validate = validateDocument(
+        "ApiArticleArticlePublishedCreateRequest",
       );
+      const data = {
+        title: "12345",
+        email: "a@b.co",
+        seo: [{ heading: "SEO" }],
+      };
+      expect(validate({ data })).toBe(true);
       expect(
         validate({
-          data: { seo: [], title: null, email: "invalid", rating: -1 },
+          data: { ...data, page: jsonNull, cover: jsonNull, blocks: [] },
         }),
       ).toBe(true);
-      expect(validate({ data: { seo: [], title: "12345678901" } })).toBe(false);
-    }
-  });
+      for (const invalid of [
+        { title: jsonNull },
+        { title: "1234" },
+        { email: "invalid" },
+        { email: jsonNull },
+        { rating: 1 },
+        { rating: 9 },
+        { rating: 2.5 },
+        { price: 0.4 },
+        { price: 10.6 },
+        { label: jsonNull },
+        { slug: "a b" },
+        { slug: "ab" },
+        { seo: [] },
+        { seo: jsonNull },
+        { seo: [{ heading: "ab" }] },
+      ]) {
+        expect(validate({ data: { ...data, ...invalid } })).toBe(false);
+      }
+      for (const missingData of [
+        {},
+        { title: "12345" },
+        { email: "a@b.co", seo: [{ heading: "SEO" }] },
+      ]) {
+        expect(validate({ data: missingData })).toBe(false);
+      }
+    });
 
-  it("accepts numeric strings only on input", () => {
-    const data = { title: "12345", email: "a@b.co", seo: [{ heading: "SEO" }] };
-    for (const state of ["Published", "Draft"]) {
-      const validate = validateDocument(
-        `ApiArticleArticle${state}CreateRequest`,
-      );
-      expect(validate({ data: { ...data, price: "12.34", rating: "3" } })).toBe(
-        true,
-      );
-      expect(validate({ data: { ...data, rating: "abc" } })).toBe(false);
-    }
-    const response = validateDocument("ApiArticleArticlePublishedDocument");
-    expect(response({ ...published, rating: 3 })).toBe(true);
-    expect(response({ ...published, rating: "3" })).toBe(false);
-  });
-
-  it("exposes publication-specific create constraints without requiring defaulted or relational attributes", () => {
-    const validate = validateDocument(
-      "ApiArticleArticlePublishedCreateRequest",
-    );
-    const data = { title: "12345", email: "a@b.co", seo: [{ heading: "SEO" }] };
-    expect(validate({ data })).toBe(true);
-    expect(
-      validate({ data: { ...data, page: null, cover: null, blocks: [] } }),
-    ).toBe(true);
-    for (const invalid of [
-      { title: null },
-      { title: "1234" },
-      { email: "invalid" },
-      { email: null },
-      { rating: 1 },
-      { rating: 9 },
-      { rating: 2.5 },
-      { price: 0.4 },
-      { price: 10.6 },
-      { label: null },
-      { slug: "a b" },
-      { slug: "ab" },
-      { seo: [] },
-      { seo: null },
-      { seo: [{ heading: "ab" }] },
-    ]) {
-      expect(validate({ data: { ...data, ...invalid } })).toBe(false);
-    }
-    for (const missingData of [
-      {},
-      { title: "12345" },
-      { email: "a@b.co", seo: [{ heading: "SEO" }] },
-    ]) {
-      expect(validate({ data: missingData })).toBe(false);
-    }
-  });
-
-  it("relaxes draft create rules throughout nested components but retains scalar upper bounds", () => {
-    const validate = validateDocument("ApiArticleArticleDraftCreateRequest");
-    for (const data of [
-      { seo: [] },
-      { seo: [{}], title: null, email: null, rating: -1, price: -0.5 },
-      {
-        seo: [{ heading: null }],
-        summary: null,
-        slug: "space ok",
-        label: null,
-      },
-      {
-        seo: [{}, {}, {}],
-        blocks: [
-          { __component: "shared.seo" },
-          { __component: "shared.seo" },
-          { __component: "shared.seo" },
-        ],
-      },
-    ]) {
-      expect(validate({ data })).toBe(true);
-    }
-    for (const invalid of [
-      { title: "12345678901" },
-      { email: `${"a".repeat(35)}@x.com` },
-      { rating: 9 },
-      { rating: 1.5 },
-      { price: 10.6 },
-      { seo: [{ heading: "123456789" }] },
-      { summary: { heading: "123456789" } },
-      { shortText: "x".repeat(256) },
-      { slug: "x".repeat(13) },
-      { seo: null },
-      { blocks: null },
-    ]) {
-      expect(validate({ data: { seo: [], ...invalid } })).toBe(false);
-    }
-  });
-
-  it("distinguishes retained components from new components in published updates", () => {
-    const validate = validateDocument(
-      "ApiArticleArticlePublishedUpdateRequest",
-    );
-    for (const data of [
-      {},
-      { seo: [{ id: 1 }] },
-      { summary: { id: 1 }, seo: [{ id: 2, heading: "SEO" }] },
-      { seo: [{ heading: "SEO" }] },
-      { blocks: [{ id: 1, __component: "shared.seo" }] },
-      { blocks: [{ __component: "shared.seo", heading: "SEO" }] },
-      { page: null, cover: null },
-    ]) {
-      expect(validate({ data })).toBe(true);
-    }
-    for (const data of [
-      { title: null },
-      { label: null },
-      { seo: [{}] },
-      { summary: {} },
-      { seo: [{ id: 1, heading: null }] },
-      { seo: [{ id: 1 }, {}] },
-      { blocks: [{ __component: "shared.seo" }] },
-      { blocks: [{ id: 1 }] },
-      { blocks: [{ __component: "shared.seo", heading: "ab" }] },
-    ]) {
-      expect(validate({ data })).toBe(false);
-    }
-    const validateDraftUpdate = validateDocument(
-      "ApiArticleArticleDraftUpdateRequest",
-    );
-    expect(validateDraftUpdate({ data: {} })).toBe(true);
-    expect(
-      validateDraftUpdate({ data: { seo: [{}], summary: {}, title: null } }),
-    ).toBe(true);
-  });
-
-  it("keeps non-draft writes strict and enforces the default short-text maximum", () => {
-    const validatePage = validateDocument("ApiPagePageCreateRequest");
-    expect(validatePage({ data: { title: "12345" } })).toBe(true);
-    expect(validatePage({ data: {} })).toBe(false);
-    expect(validatePage({ data: { title: null } })).toBe(false);
-    expect(validatePage({ data: { title: "1234" } })).toBe(false);
-    for (const name of ["Draft", "Published"]) {
-      const validate = validateDocument(
-        `ApiArticleArticle${name}UpdateRequest`,
-      );
-      expect(validate({ data: { shortText: "x".repeat(255) } })).toBe(true);
-      expect(validate({ data: { shortText: "x".repeat(256) } })).toBe(false);
-    }
-  });
-
-  it("relates status query values to precise body schemas through operation metadata", () => {
-    for (const [route, method, action] of [
-      ["/articles", "post", "Create"],
-      ["/articles/{id}", "put", "Update"],
-    ] as const) {
-      const operation = fixture.document?.paths[route]?.[method];
-      expect(operation?.["x-strapi-request-status"]).toStrictEqual({
-        parameter: "status",
-        default: "published",
-        schemas: {
-          draft: {
-            $ref: `#/components/schemas/ApiArticleArticleDraft${action}Request`,
-          },
-          published: {
-            $ref: `#/components/schemas/ApiArticleArticlePublished${action}Request`,
-          },
+    it("relaxes draft create rules throughout nested components but retains scalar upper bounds", () => {
+      const validate = validateDocument("ApiArticleArticleDraftCreateRequest");
+      for (const data of [
+        { seo: [] },
+        {
+          seo: [{}],
+          title: jsonNull,
+          email: jsonNull,
+          rating: -1,
+          price: -0.5,
         },
-      });
-    }
-    expect(fixture.document?.paths["/pages"]?.["post"]).not.toHaveProperty(
-      "x-strapi-request-status",
-    );
-  });
+        {
+          seo: [{ heading: jsonNull }],
+          summary: jsonNull,
+          slug: "space ok",
+          label: jsonNull,
+        },
+        {
+          seo: [{}, {}, {}],
+          blocks: [
+            { __component: "shared.seo" },
+            { __component: "shared.seo" },
+            { __component: "shared.seo" },
+          ],
+        },
+      ]) {
+        expect(validate({ data })).toBe(true);
+      }
+      for (const invalid of [
+        { title: "12345678901" },
+        { email: `${"a".repeat(35)}@x.com` },
+        { rating: 9 },
+        { rating: 1.5 },
+        { price: 10.6 },
+        { seo: [{ heading: "123456789" }] },
+        { summary: { heading: "123456789" } },
+        { shortText: "x".repeat(256) },
+        { slug: "x".repeat(13) },
+        { seo: jsonNull },
+        { blocks: jsonNull },
+      ]) {
+        expect(validate({ data: { seo: [], ...invalid } })).toBe(false);
+      }
+    });
 
-  it("excludes system and explicitly nonwritable attributes from generated inputs", () => {
-    for (const state of ["Draft", "Published"]) {
-      for (const action of ["Create", "Update"]) {
-        const schema =
-          fixture.document?.components.schemas[
-            `ApiArticleArticle${state}${action}Input`
-          ];
-        const properties = toRecord(schema?.["properties"]);
-        expect(properties).toHaveProperty("title");
-        for (const key of [
-          "id",
-          "documentId",
-          "createdAt",
-          "updatedAt",
-          "publishedAt",
-          "internalCode",
-        ]) {
-          expect(properties).not.toHaveProperty(key);
+    it("distinguishes retained components from new components in published updates", () => {
+      const validate = validateDocument(
+        "ApiArticleArticlePublishedUpdateRequest",
+      );
+      for (const data of [
+        {},
+        { seo: [{ id: 1 }] },
+        { summary: { id: 1 }, seo: [{ id: 2, heading: "SEO" }] },
+        { seo: [{ heading: "SEO" }] },
+        { blocks: [{ id: 1, __component: "shared.seo" }] },
+        { blocks: [{ __component: "shared.seo", heading: "SEO" }] },
+        { page: jsonNull, cover: jsonNull },
+      ]) {
+        expect(validate({ data })).toBe(true);
+      }
+      for (const data of [
+        { title: jsonNull },
+        { label: jsonNull },
+        { seo: [{}] },
+        { summary: {} },
+        { seo: [{ id: 1, heading: jsonNull }] },
+        { seo: [{ id: 1 }, {}] },
+        { blocks: [{ __component: "shared.seo" }] },
+        { blocks: [{ id: 1 }] },
+        { blocks: [{ __component: "shared.seo", heading: "ab" }] },
+      ]) {
+        expect(validate({ data })).toBe(false);
+      }
+    });
+
+    it("allows incomplete components and null titles in draft updates", () => {
+      const validateDraftUpdate = validateDocument(
+        "ApiArticleArticleDraftUpdateRequest",
+      );
+      expect(validateDraftUpdate({ data: {} })).toBe(true);
+      expect(
+        validateDraftUpdate({
+          data: { seo: [{}], summary: {}, title: jsonNull },
+        }),
+      ).toBe(true);
+    });
+
+    it("keeps non-draft writes strict", () => {
+      const validatePage = validateDocument("ApiPagePageCreateRequest");
+      expect(validatePage({ data: { title: "12345" } })).toBe(true);
+      expect(validatePage({ data: {} })).toBe(false);
+      expect(validatePage({ data: { title: jsonNull } })).toBe(false);
+      expect(validatePage({ data: { title: "1234" } })).toBe(false);
+    });
+
+    it("keeps the default short-text maximum in draft and published updates", () => {
+      for (const name of ["Draft", "Published"]) {
+        const validate = validateDocument(
+          `ApiArticleArticle${name}UpdateRequest`,
+        );
+        expect(validate({ data: { shortText: "x".repeat(255) } })).toBe(true);
+        expect(validate({ data: { shortText: "x".repeat(256) } })).toBe(false);
+      }
+    });
+
+    it("relates status query values to precise body schemas through operation metadata", () => {
+      for (const [route, method, action] of [
+        ["/articles", "post", "Create"],
+        ["/articles/{id}", "put", "Update"],
+      ] as const) {
+        const operation = fixture.document?.paths[route]?.[method];
+        expect(operation?.["x-strapi-request-status"]).toStrictEqual({
+          parameter: "status",
+          default: "published",
+          schemas: {
+            draft: {
+              $ref: `#/components/schemas/ApiArticleArticleDraft${action}Request`,
+            },
+            published: {
+              $ref: `#/components/schemas/ApiArticleArticlePublished${action}Request`,
+            },
+          },
+        });
+      }
+      expect(fixture.document?.paths["/pages"]?.["post"]).not.toHaveProperty(
+        "x-strapi-request-status",
+      );
+    });
+
+    it("excludes system and explicitly nonwritable attributes from generated inputs", () => {
+      for (const state of ["Draft", "Published"]) {
+        for (const action of ["Create", "Update"]) {
+          const schema =
+            fixture.document?.components.schemas[
+              `ApiArticleArticle${state}${action}Input`
+            ];
+          const properties = toRecord(schema?.["properties"]);
+          expect(properties).toHaveProperty("title");
+          for (const key of [
+            "id",
+            "documentId",
+            "createdAt",
+            "updatedAt",
+            "publishedAt",
+            "internalCode",
+          ]) {
+            expect(properties).not.toHaveProperty(key);
+          }
         }
       }
-    }
+    });
+
+    it("applies conditional component create validation to single components and dynamic-zone blocks", () => {
+      const validate = validateDocument(
+        "ApiArticleArticlePublishedCreateRequest",
+      );
+      const data = {
+        title: "12345",
+        email: "a@b.co",
+        seo: [{ heading: "SEO" }],
+      };
+      for (const wrap of [
+        (link: JsonSchema): JsonSchema => ({ link }),
+        (link: JsonSchema): JsonSchema => ({
+          blocks: [{ __component: "shared.conditional-link", ...link }],
+        }),
+      ]) {
+        for (const link of [
+          { label: "x" },
+          { kind: "internal", label: "x" },
+          { kind: "internal", label: "x", url: jsonNull },
+          { kind: "external", label: "x", url: "/target" },
+        ]) {
+          expect(validate({ data: { ...data, ...wrap(link) } })).toBe(true);
+        }
+        for (const link of [
+          { kind: "external", label: "x" },
+          { kind: "external", label: "x", url: "" },
+          { kind: "external", label: "x", url: jsonNull },
+          { kind: "internal", label: "" },
+        ]) {
+          expect(validate({ data: { ...data, ...wrap(link) } })).toBe(false);
+        }
+      }
+    });
+
+    it("relaxes conditional validation for retained components in published updates", () => {
+      const update = validateDocument(
+        "ApiArticleArticlePublishedUpdateRequest",
+      );
+      expect(update({ data: { link: { id: 1 } } })).toBe(true);
+      expect(update({ data: { link: { kind: "external", label: "x" } } })).toBe(
+        false,
+      );
+      expect(update({ data: { link: { id: 1, url: jsonNull } } })).toBe(true);
+    });
   });
 
-  it("applies conditional component create validation to single components and dynamic-zone blocks", () => {
-    const validate = validateDocument(
-      "ApiArticleArticlePublishedCreateRequest",
-    );
-    const data = { title: "12345", email: "a@b.co", seo: [{ heading: "SEO" }] };
-    for (const wrap of [
-      (link: JsonSchema): JsonSchema => ({ link }),
-      (link: JsonSchema): JsonSchema => ({
-        blocks: [{ __component: "shared.conditional-link", ...link }],
-      }),
-    ]) {
-      for (const link of [
-        { label: "x" },
-        { kind: "internal", label: "x" },
-        { kind: "internal", label: "x", url: null },
-        { kind: "external", label: "x", url: "/target" },
-      ]) {
-        expect(validate({ data: { ...data, ...wrap(link) } })).toBe(true);
-      }
-      for (const link of [
-        { kind: "external", label: "x" },
-        { kind: "external", label: "x", url: "" },
-        { kind: "external", label: "x", url: null },
-        { kind: "internal", label: "" },
-      ]) {
-        expect(validate({ data: { ...data, ...wrap(link) } })).toBe(false);
-      }
-    }
-    const update = validateDocument("ApiArticleArticlePublishedUpdateRequest");
-    expect(update({ data: { link: { id: 1 } } })).toBe(true);
-    expect(update({ data: { link: { kind: "external", label: "x" } } })).toBe(
-      false,
-    );
-    expect(update({ data: { link: { id: 1, url: null } } })).toBe(true);
-  });
+  describe("response validation", () => {
+    const published = {
+      id: 1,
+      documentId: "fixture",
+      publishedAt: "2026-11-17T00:00:00.000Z",
+    };
+    const draftEntry = { ...published, publishedAt: jsonNull };
 
-  it("preserves conditional projection behavior in component and dynamic-zone responses", () => {
-    const validate = validateDocument("ApiArticleArticlePublishedDocument");
-    for (const wrap of [
-      (link: JsonSchema): JsonSchema => ({ link: { id: 1, ...link } }),
-      (link: JsonSchema): JsonSchema => ({
-        blocks: [{ id: 1, __component: "shared.conditional-link", ...link }],
-      }),
-    ]) {
+    it("requires JSON numbers in responses", () => {
+      const response = validateDocument("ApiArticleArticlePublishedDocument");
+      expect(response({ ...published, rating: 3 })).toBe(true);
+      expect(response({ ...published, rating: "3" })).toBe(false);
+    });
+
+    it("preserves conditional projection behavior in component and dynamic-zone responses", () => {
+      const validate = validateDocument("ApiArticleArticlePublishedDocument");
+      for (const wrap of [
+        (link: JsonSchema): JsonSchema => ({ link: { id: 1, ...link } }),
+        (link: JsonSchema): JsonSchema => ({
+          blocks: [{ id: 1, __component: "shared.conditional-link", ...link }],
+        }),
+      ]) {
+        expect(
+          validate({
+            ...published,
+            ...wrap({ kind: "internal", url: jsonNull }),
+          }),
+        ).toBe(true);
+        expect(
+          validate({
+            ...published,
+            ...wrap({ kind: "external", url: "/target" }),
+          }),
+        ).toBe(true);
+        expect(validate({ ...published, ...wrap({ url: jsonNull }) })).toBe(
+          true,
+        );
+        expect(
+          validate({ ...published, ...wrap({ kind: "external", url: "" }) }),
+        ).toBe(false);
+        expect(
+          validate({
+            ...published,
+            ...wrap({ kind: "external", url: jsonNull }),
+          }),
+        ).toBe(false);
+      }
+    });
+
+    it("validates published string lengths, email format and numeric ranges", () => {
+      const validate = validateDocument("ApiArticleArticlePublishedDocument");
       expect(
-        validate({ ...published, ...wrap({ kind: "internal", url: null }) }),
+        validate({
+          ...published,
+          title: "12345",
+          email: "a@b.co",
+          rating: 2,
+          price: 0.5,
+        }),
       ).toBe(true);
       expect(
         validate({
           ...published,
-          ...wrap({ kind: "external", url: "/target" }),
+          title: "1234567890",
+          rating: 8,
+          email: `${"a".repeat(34)}@x.com`,
+          price: 10.5,
         }),
       ).toBe(true);
-      expect(validate({ ...published, ...wrap({ url: null }) })).toBe(true);
-      expect(
-        validate({ ...published, ...wrap({ kind: "external", url: "" }) }),
-      ).toBe(false);
-      expect(
-        validate({ ...published, ...wrap({ kind: "external", url: null }) }),
-      ).toBe(false);
-    }
-  });
+      for (const invalid of [
+        { title: "1234" },
+        { title: "12345678901" },
+        { title: jsonNull },
+        { email: "not-an-email" },
+        { email: "a@b.c" },
+        { email: `${"a".repeat(35)}@x.com` },
+        { email: jsonNull },
+        { rating: 1 },
+        { rating: 9 },
+        { rating: 2.5 },
+        { price: 0.4 },
+        { price: 10.6 },
+        { publishedAt: jsonNull },
+      ]) {
+        expect(validate({ ...published, ...invalid })).toBe(false);
+      }
+    });
 
-  it("validates published string lengths, email format and numeric ranges", () => {
-    const validate = validateDocument("ApiArticleArticlePublishedDocument");
-    expect(
-      validate({
-        ...published,
-        title: "12345",
-        email: "a@b.co",
-        rating: 2,
-        price: 0.5,
-      }),
-    ).toBe(true);
-    expect(
-      validate({
-        ...published,
-        title: "1234567890",
-        rating: 8,
-        email: `${"a".repeat(34)}@x.com`,
-        price: 10.5,
-      }),
-    ).toBe(true);
-    for (const invalid of [
-      { title: "1234" },
-      { title: "12345678901" },
-      { title: null },
-      { email: "not-an-email" },
-      { email: "a@b.c" },
-      { email: `${"a".repeat(35)}@x.com` },
-      { email: null },
-      { rating: 1 },
-      { rating: 9 },
-      { rating: 2.5 },
-      { price: 0.4 },
-      { price: 10.6 },
-      { publishedAt: null },
-    ]) {
-      expect(validate({ ...published, ...invalid })).toBe(false);
-    }
-  });
+    it("relaxes draft required, minimum length, email and numeric minimum rules only", () => {
+      const validate = validateDocument("ApiArticleArticleDraftDocument");
+      for (const valid of [
+        { title: "" },
+        { title: "1234" },
+        { title: jsonNull, email: jsonNull },
+        { email: "invalid" },
+        { email: "" },
+        { rating: -1, price: -0.5 },
+      ]) {
+        expect(validate({ ...draftEntry, ...valid })).toBe(true);
+      }
+      for (const invalid of [
+        { title: "12345678901" },
+        { email: `${"a".repeat(35)}@x.com` },
+        { rating: 9 },
+        { rating: 2.5 },
+        { price: 10.6 },
+        { title: 123 },
+        { publishedAt: published.publishedAt },
+      ]) {
+        expect(validate({ ...draftEntry, ...invalid })).toBe(false);
+      }
+    });
 
-  it("relaxes draft required, minimum length, email and numeric minimum rules only", () => {
-    const validate = validateDocument("ApiArticleArticleDraftDocument");
-    for (const valid of [
-      { title: "" },
-      { title: "1234" },
-      { title: null, email: null },
-      { email: "invalid" },
-      { email: "" },
-      { rating: -1, price: -0.5 },
-    ]) {
-      expect(validate({ ...draftEntry, ...valid })).toBe(true);
-    }
-    for (const invalid of [
-      { title: "12345678901" },
-      { email: `${"a".repeat(35)}@x.com` },
-      { rating: 9 },
-      { rating: 2.5 },
-      { price: 10.6 },
-      { title: 123 },
-      { publishedAt: published.publishedAt },
-    ]) {
-      expect(validate({ ...draftEntry, ...invalid })).toBe(false);
-    }
-  });
+    it("keeps selected fields and populated attributes optional in both states", () => {
+      for (const [name, entry] of [
+        ["ApiArticleArticlePublishedDocument", published],
+        ["ApiArticleArticleDraftDocument", draftEntry],
+      ] as const) {
+        const validate = validateDocument(name);
+        expect(validate(entry)).toBe(true);
+        expect(validate({ id: 1, documentId: "fixture" })).toBe(true);
+        expect(validate({ ...entry, seo: [{ id: 1 }], page: jsonNull })).toBe(
+          true,
+        );
+        expect(validate({ ...entry, rating: jsonNull, price: jsonNull })).toBe(
+          true,
+        );
+      }
+    });
 
-  it("keeps selected fields and populated attributes optional in both states", () => {
-    for (const [name, entry] of [
-      ["ApiArticleArticlePublishedDocument", published],
-      ["ApiArticleArticleDraftDocument", draftEntry],
-    ] as const) {
-      const validate = validateDocument(name);
-      expect(validate(entry)).toBe(true);
-      expect(validate({ id: 1, documentId: "fixture" })).toBe(true);
-      expect(validate({ ...entry, seo: [{ id: 1 }], page: null })).toBe(true);
-      expect(validate({ ...entry, rating: null, price: null })).toBe(true);
-    }
-  });
-
-  it("applies component restrictions in the parent state and keeps related non-draft documents strict", () => {
-    const validatePublished = validateDocument(
-      "ApiArticleArticlePublishedDocument",
-    );
-    const validateDraft = validateDocument("ApiArticleArticleDraftDocument");
-    expect(
-      validatePublished({ ...published, seo: [{ id: 1, heading: "SEO" }] }),
-    ).toBe(true);
-    for (const seo of [
-      null,
-      [],
-      [{ id: 1, heading: "ab" }],
-      [{ id: 1, heading: null }],
-      [{ id: 1 }, { id: 2 }, { id: 3 }],
-    ]) {
-      expect(validatePublished({ ...published, seo })).toBe(false);
-    }
-    for (const seo of [
-      null,
-      [],
-      [{ id: 1, heading: "" }],
-      [{ id: 1, heading: null }],
-      [{ id: 1 }, { id: 2 }, { id: 3 }],
-    ]) {
-      expect(validateDraft({ ...draftEntry, seo })).toBe(true);
-    }
-    expect(
-      validateDraft({ ...draftEntry, seo: [{ id: 1, heading: "123456789" }] }),
-    ).toBe(false);
-    expect(
-      validateDraft({
-        ...draftEntry,
-        page: { id: 2, documentId: "page", title: "1234" },
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    [
-      "/articles",
-      (entry: unknown): JsonSchema => ({
-        data: [entry],
-        meta: { pagination: { page: 1, pageSize: 10 } },
-      }),
-    ],
-    [
-      "/articles/{id}",
-      (entry: unknown): JsonSchema => ({ data: entry, meta: {} }),
-    ],
-  ] as const)(
-    "uses the draft/published union in the %s operation response",
-    (route, response) => {
-      const operation = fixture.document?.paths[route]?.["get"];
-      const responses = toRecord(operation?.["responses"]);
-      const content = toRecord(toRecord(responses["200"])["content"]);
-      const schema = toRecord(toRecord(content["application/json"])["schema"]);
-      const validate = compileSchema(schema);
-      expect(validate(response({ ...published, title: "12345" }))).toBe(true);
-      expect(
-        validate(response({ ...draftEntry, title: "", email: "invalid" })),
-      ).toBe(true);
-      expect(validate(response({ ...published, title: "1234" }))).toBe(false);
-      expect(validate(response({ ...draftEntry, title: "12345678901" }))).toBe(
-        false,
+    it("applies component restrictions in the parent state and keeps related non-draft documents strict", () => {
+      const validatePublished = validateDocument(
+        "ApiArticleArticlePublishedDocument",
       );
-    },
-  );
+      const validateDraft = validateDocument("ApiArticleArticleDraftDocument");
+      expect(
+        validatePublished({ ...published, seo: [{ id: 1, heading: "SEO" }] }),
+      ).toBe(true);
+      for (const seo of [
+        jsonNull,
+        [],
+        [{ id: 1, heading: "ab" }],
+        [{ id: 1, heading: jsonNull }],
+        [{ id: 1 }, { id: 2 }, { id: 3 }],
+      ]) {
+        expect(validatePublished({ ...published, seo })).toBe(false);
+      }
+      for (const seo of [
+        jsonNull,
+        [],
+        [{ id: 1, heading: "" }],
+        [{ id: 1, heading: jsonNull }],
+        [{ id: 1 }, { id: 2 }, { id: 3 }],
+      ]) {
+        expect(validateDraft({ ...draftEntry, seo })).toBe(true);
+      }
+      expect(
+        validateDraft({
+          ...draftEntry,
+          seo: [{ id: 1, heading: "123456789" }],
+        }),
+      ).toBe(false);
+      expect(
+        validateDraft({
+          ...draftEntry,
+          page: { id: 2, documentId: "page", title: "1234" },
+        }),
+      ).toBe(false);
+    });
 
-  it("keeps non-draft content types strict", () => {
-    const validate = validateDocument("ApiPagePageDocument");
-    const page = { id: 1, documentId: "page" };
-    expect(validate(page)).toBe(true);
-    expect(validate({ ...page, title: "12345" })).toBe(true);
-    expect(validate({ ...page, title: "1234" })).toBe(false);
-    expect(validate({ ...page, title: null })).toBe(false);
-  });
+    it.each([
+      [
+        "/articles",
+        (entry: unknown): JsonSchema => ({
+          data: [entry],
+          meta: { pagination: { page: 1, pageSize: 10 } },
+        }),
+      ],
+      [
+        "/articles/{id}",
+        (entry: unknown): JsonSchema => ({ data: entry, meta: {} }),
+      ],
+    ] as const)(
+      "uses the draft/published union in the %s operation response",
+      (route, response) => {
+        const operation = fixture.document?.paths[route]?.["get"];
+        const responses = toRecord(operation?.["responses"]);
+        const content = toRecord(toRecord(responses["200"])["content"]);
+        const schema = toRecord(
+          toRecord(content["application/json"])["schema"],
+        );
+        const validate = compileSchema(schema);
+        expect(validate(response({ ...published, title: "12345" }))).toBe(true);
+        expect(
+          validate(response({ ...draftEntry, title: "", email: "invalid" })),
+        ).toBe(true);
+        expect(validate(response({ ...published, title: "1234" }))).toBe(false);
+        expect(
+          validate(response({ ...draftEntry, title: "12345678901" })),
+        ).toBe(false);
+      },
+    );
 
-  it("omits unsupported single-type aliases", () => {
-    expect(fixture.document?.components.schemas).not.toHaveProperty(
-      "ApiSiteSettingSiteSettingListResponse",
-    );
-    expect(fixture.document?.components.schemas).not.toHaveProperty(
-      "ApiSiteSettingSiteSettingCreateRequest",
-    );
+    it("keeps non-draft content types strict", () => {
+      const validate = validateDocument("ApiPagePageDocument");
+      const page = { id: 1, documentId: "page" };
+      expect(validate(page)).toBe(true);
+      expect(validate({ ...page, title: "12345" })).toBe(true);
+      expect(validate({ ...page, title: "1234" })).toBe(false);
+      expect(validate({ ...page, title: jsonNull })).toBe(false);
+    });
   });
 });
-/* oxlint-enable unicorn/no-null */

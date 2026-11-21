@@ -62,7 +62,7 @@ const readContentType = async (
   const info = toRecord(schema["info"]);
   const i18n = toRecord(toRecord(schema["pluginOptions"])["i18n"]);
   const options = toRecord(schema["options"]);
-  const privateAttributes = options["privateAttributes"];
+  const { privateAttributes } = options;
 
   return {
     apiName,
@@ -72,7 +72,7 @@ const readContentType = async (
     localized: i18n["localized"] === true,
     pluralName: toOptionalString(info["pluralName"]) ?? `${name}s`,
     privateAttributes: isUnknownArray(privateAttributes)
-      ? privateAttributes.filter((name) => typeof name === "string")
+      ? privateAttributes.filter((attribute) => typeof attribute === "string")
       : [],
     singularName: toOptionalString(info["singularName"]) ?? name,
     uid: `api::${apiName}.${name}`,

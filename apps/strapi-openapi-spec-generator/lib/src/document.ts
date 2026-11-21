@@ -113,9 +113,9 @@ const fieldsParameter = (
   model: DiscoveredContentType,
   base: Parameter,
 ): Parameter => {
-  const alternatives = ["\\*"];
+  const alternatives = [String.raw`\*`];
   for (const name of model.selectableFields) {
-    alternatives.push(name.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+    alternatives.push(name.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`));
   }
   const field = `(?:${alternatives.join("|")})`;
   const item = {
@@ -215,13 +215,15 @@ const findCoreAction = (
 const buildOperation = (
   route: Route,
   path: string,
-  contentTypes: DiscoveredContentType[],
-  query: Record<QueryName, Parameter>,
+  context: {
+    contentTypes: DiscoveredContentType[];
+    query: Record<QueryName, Parameter>;
+  },
 ): Operation => {
-  const core = findCoreAction(route, contentTypes);
+  const core = findCoreAction(route, context.contentTypes);
   const common = {
     operationId: `${route.method} ${path}`,
-    parameters: routeParameters(route.path, query, core),
+    parameters: routeParameters(route.path, context.query, core),
   };
   const responses: Record<string, JsonSchema> = route.auth
     ? {
@@ -269,7 +271,10 @@ const buildOperation = (
 /** Builds the OpenAPI content API from extracted routes, content types and schemas. */
 const buildDocument = (input: DocumentInput): OpenApiDocument => {
   const paths: OpenApiDocument["paths"] = {};
-  const query = createQueryParameters(input.queryEnums);
+  const context = {
+    contentTypes: input.contentTypes,
+    query: createQueryParameters(input.queryEnums),
+  };
   for (const route of input.routes) {
     const key = route.path.replaceAll(
       /:(?<name>\w+)(?:\([^)]*\))?/gu,
@@ -277,7 +282,7 @@ const buildDocument = (input: DocumentInput): OpenApiDocument => {
     );
     paths[key] = {
       ...paths[key],
-      [route.method]: buildOperation(route, key, input.contentTypes, query),
+      [route.method]: buildOperation(route, key, context),
     };
   }
 

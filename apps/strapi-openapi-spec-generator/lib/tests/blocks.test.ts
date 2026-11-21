@@ -1,4 +1,3 @@
-/* oxlint-disable unicorn/no-null -- Strapi responses carry null. */
 /**
  * Rich text (blocks) responses as Strapi 5.62 stores them, which its own
  * declarations misdescribe.
@@ -27,9 +26,11 @@ const addArticleBody = async (directory: string): Promise<void> => {
 
 const fixture = generatedFixture(addArticleBody);
 
-it("selects a declaration-only blocks field on its own model", () => {
-  expect(fixture.validateQuery("/articles", "fields")("body")).toBe(true);
-  expect(fixture.validateQuery("/pages", "fields")("body")).toBe(false);
+describe("rich text field selection", () => {
+  it("selects a declaration-only blocks field on its own model", () => {
+    expect(fixture.validateQuery("/articles", "fields")("body")).toBe(true);
+    expect(fixture.validateQuery("/pages", "fields")("body")).toBe(false);
+  });
 });
 
 const published = {
@@ -133,4 +134,3 @@ describe("rich text paragraph size", () => {
     ).toBe(false);
   });
 });
-/* oxlint-enable unicorn/no-null */

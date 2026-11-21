@@ -1,13 +1,20 @@
+import type { ValidateFunction } from "ajv";
+
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { parseJsonObject, toRecord } from "../src/json.js";
 import { generatedFixture } from "./generated-fixture.js";
 
+vi.setConfig({ testTimeout: 5000 });
+
 describe("source regex on entity writes", () => {
   const fixture = generatedFixture(async (directory) => {
-    const patch = async (file: string, changes: Record<string, object>) => {
+    const patch = async (
+      file: string,
+      changes: Record<string, object>,
+    ): Promise<void> => {
       const target = path.join(directory, file);
       const schema = parseJsonObject(await readFile(target, "utf8"));
       const attributes = toRecord(schema["attributes"]);
@@ -35,14 +42,14 @@ describe("source regex on entity writes", () => {
     );
     await patch("src/api/article/content-types/article/schema.json", {
       label: { regex: "[A-Z]" },
-      shortText: { regex: "^ref-\\d+$" },
+      shortText: { regex: String.raw`^ref-\d+$` },
       slug: { regex: "^/[a-z]+$" },
       bodyText: { type: "text", regex: "^T" },
       bodyRich: { type: "richtext", regex: "^R" },
       optionalUid: { type: "uid", regex: "^/ok$" },
-      legacyUid: { type: "uid", regex: "^\\q$" },
+      legacyUid: { type: "uid", regex: String.raw`^\q$` },
       broken: { type: "string", regex: "[" },
-      email: { regex: "@example\\.org$" },
+      email: { regex: String.raw`@example\.org$` },
       title: {
         regex: "^NEWS-",
         conditions: { visible: { "==": [{ var: "rating" }, 2] } },
@@ -59,7 +66,7 @@ describe("source regex on entity writes", () => {
       title: { regex: "^.{5}$" },
     });
   });
-  const validate = (role: string) =>
+  const validate = (role: string): ValidateFunction =>
     fixture.validateDocument(`ApiArticleArticle${role}`);
 
   it("checks published creates and updates but neither drafts nor reads", () => {
@@ -87,17 +94,31 @@ describe("source regex on entity writes", () => {
     ).toBe(true);
   });
 
-  it("skips the optional empty string without removing nullability or other validators", () => {
+  it("skips an optional empty string without removing nullability", () => {
     const update = validate("PublishedUpdateInput");
-    for (const shortText of ["", null, "ref-23"])
-      expect(update({ shortText })).toBe(true);
+    expect(update({ shortText: "" })).toBe(true);
+    // oxlint-disable-next-line unicorn/no-null -- Explicit JSON null must remain valid.
+    expect(update({ shortText: null })).toBe(true);
+    expect(update({ shortText: "ref-23" })).toBe(true);
     expect(update({ shortText: "other" })).toBe(false);
+  });
+
+  it("validates text and rich text with their source regexes", () => {
+    const update = validate("PublishedUpdateInput");
     expect(update({ bodyText: "Text", bodyRich: "Rich" })).toBe(true);
     expect(update({ bodyText: "wrong" })).toBe(false);
     expect(update({ bodyRich: "wrong" })).toBe(false);
+  });
+
+  it("validates both the email format and the source regex", () => {
+    const update = validate("PublishedUpdateInput");
     expect(update({ email: "bad@example.net" })).toBe(false);
     expect(update({ email: "@example.org" })).toBe(false);
     expect(update({ email: "a@example.org" })).toBe(true);
+  });
+
+  it("does not apply source regexes to numeric attributes", () => {
+    const update = validate("PublishedUpdateInput");
     expect(update({ rating: "3" })).toBe(true);
   });
 
@@ -106,9 +127,13 @@ describe("source regex on entity writes", () => {
     expect(update({ slug: "/news" })).toBe(true);
     expect(update({ slug: "news" })).toBe(false);
     expect(update({ slug: "/x" })).toBe(false); // Existing minLength remains.
+    expect(validate("DraftUpdateInput")({ slug: "news" })).toBe(true);
+  });
+
+  it("enforces the source regex on an optional UID even when empty", () => {
+    const update = validate("PublishedUpdateInput");
     expect(update({ optionalUid: "" })).toBe(false);
     expect(update({ optionalUid: "/ok" })).toBe(true);
-    expect(validate("DraftUpdateInput")({ slug: "news" })).toBe(true);
   });
 
   it("enforces visible and nested fields without validating hidden values", () => {
@@ -132,9 +157,8 @@ describe("source regex on entity writes", () => {
     expect(update({ passcode: "" })).toBe(true);
     expect(update({ title: "abcdef" })).toBe(true);
     expect(
-      fixture.warnings.filter(
-        (message) =>
-          message.includes("api::page.page.title") && message.includes("regex"),
+      fixture.warnings.filter((message) =>
+        /api::page\.page\.title.*regex/u.test(message),
       ),
     ).toHaveLength(1);
   });
@@ -147,7 +171,7 @@ describe("source regex on entity writes", () => {
         "ApiArticleArticlePublishedUpdateInput"
       ];
     expect(schema?.["properties"]).toMatchObject({
-      legacyUid: { "x-strapi-regex": "^\\q$" },
+      legacyUid: { "x-strapi-regex": String.raw`^\q$` },
       broken: { "x-strapi-regex": "[" },
     });
     expect(
