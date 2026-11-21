@@ -260,6 +260,15 @@ const buildOperation = (
 
   return {
     ...common,
+    ...(route.method === "get" &&
+      route.coreAction === "find" && {
+        "x-strapi-dump": {
+          uid: contentType.uid,
+          kind: contentType.kind,
+          draftAndPublish: contentType.draftAndPublish,
+          localized: contentType.localized,
+        },
+      }),
     ...(spec.request !== undefined &&
       requestFields(names[spec.request], contentType.draftAndPublish)),
     ...access,

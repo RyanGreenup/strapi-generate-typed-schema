@@ -115,3 +115,5 @@ export const generateSpecification = async (
 };
 
 export type { Specification, SpecificationOptions };
+export { dump } from "./dump.js";
+export type { DumpManifest, DumpOptions } from "./dump.js";

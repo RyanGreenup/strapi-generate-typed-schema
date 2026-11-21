@@ -29,6 +29,8 @@
   },
   "dependencies": {
     "@typescript/native": "catalog:",
+    "ajv": "catalog:",
+    "ajv-formats": "catalog:",
     "ttsc": "catalog:",
     "typescript": "catalog:",
     "typia": "catalog:"
@@ -39,8 +41,6 @@
     "@strapi/strapi": "catalog:",
     "@types/node": "catalog:",
     "@vitest/coverage-v8": "catalog:",
-    "ajv": "catalog:",
-    "ajv-formats": "catalog:",
     "bumpp": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",

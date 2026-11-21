@@ -40,14 +40,17 @@ const queryEnums = {
 /**
  * Build the document of the fixture project with empty schemas.
  *
+ * @param routesProject - Project supplying the route files for the fixture models.
  * @returns The document and the warnings from reading the routes.
  */
-const fixtureDocument = async (): Promise<{
+const fixtureDocument = async (
+  routesProject = project,
+): Promise<{
   document: OpenApiDocument;
   warnings: string[];
 }> => {
   const contentTypes = await readContentTypes(project);
-  const { routes, warnings } = await readRoutes(project, contentTypes);
+  const { routes, warnings } = await readRoutes(routesProject, contentTypes);
   const document = buildDocument({
     queryEnums,
     contentTypes: contentTypes.map((model) =>
@@ -216,6 +219,80 @@ describe("buildDocument", () => {
       });
     },
   );
+
+  it("marks core find operations with their content type and publication settings", async () => {
+    const { document } = await fixtureDocument();
+    const marked = Object.entries(document.paths).flatMap(([route, methods]) =>
+      Object.entries(methods).flatMap(([method, operation]) =>
+        Object.hasOwn(operation, "x-strapi-dump")
+          ? [{ route, method, marker: operation["x-strapi-dump"] }]
+          : [],
+      ),
+    );
+    expect(
+      marked.toSorted((left, right) => left.route.localeCompare(right.route)),
+    ).toStrictEqual([
+      {
+        route: "/articles",
+        method: "get",
+        marker: {
+          uid: "api::article.article",
+          kind: "collectionType",
+          draftAndPublish: true,
+          localized: false,
+        },
+      },
+      {
+        route: "/pages",
+        method: "get",
+        marker: {
+          uid: "api::page.page",
+          kind: "collectionType",
+          draftAndPublish: false,
+          localized: true,
+        },
+      },
+      {
+        route: "/site-setting",
+        method: "get",
+        marker: {
+          uid: "api::site-setting.site-setting",
+          kind: "singleType",
+          draftAndPublish: false,
+          localized: false,
+        },
+      },
+    ]);
+  });
+
+  it("does not mark custom core handlers when the core find route is excluded", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "strapi-custom-find-"));
+    try {
+      const routes = path.join(root, "src/api/article/routes");
+      await mkdir(routes, { recursive: true });
+      await writeFile(
+        path.join(routes, "article.ts"),
+        `createCoreRouter("api::article.article", { except: ["find"] });
+         export default { routes: [
+           { method: "GET", path: "/articles/archive", handler: "article.find" },
+           { method: "GET", path: "/archive/:id", handler: "article.findOne" }
+         ] };`,
+      );
+      const { document } = await fixtureDocument(root);
+      expect(document.paths["/articles"]?.["get"]).toBeUndefined();
+      for (const route of [
+        "/articles/{id}",
+        "/articles/archive",
+        "/archive/{id}",
+      ]) {
+        const operation = document.paths[route]?.["get"];
+        expect(operation).toHaveProperty("responses.200");
+        expect(operation).not.toHaveProperty("x-strapi-dump");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   it("describes a core action with its schemas, parameters and statuses", async () => {
     const { document } = await fixtureDocument();

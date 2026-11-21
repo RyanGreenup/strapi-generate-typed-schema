@@ -10,6 +10,7 @@ import {
   readComponents,
   readExtensions,
 } from "./conditions.js";
+import { applyModelMetadata } from "./model-metadata.js";
 import { publicSchemas } from "./public-schemas.js";
 import { applyRelations } from "./relations.js";
 import {
@@ -45,6 +46,7 @@ const generateSchemas = async (
   warnings.push(...applyConditions(models, emission.roots, schemas));
   applyRelations(models, emission.roots, schemas);
   warnings.push(...applyAttributeMetadata(metadata, emission.roots, schemas));
+  applyModelMetadata(models, emission.roots, schemas, warnings);
   const result = publicSchemas(schemas, emission.roots, input.contentTypes);
   validateSchemaRefs(result);
   const unnamed = unnamedSchemas(result);

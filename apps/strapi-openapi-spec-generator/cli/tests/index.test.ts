@@ -5,10 +5,11 @@ import { createCliCommand } from "../src/index.js";
 vi.setConfig({ testTimeout: 5000 });
 
 describe("createCliCommand", () => {
-  it("creates a CLI with generate as its default command", () => {
+  it("registers dump alongside the default generate command", () => {
     const command = createCliCommand();
 
     expect(command.default).toBe("generate");
     expect(command.subCommands).toHaveProperty("generate");
+    expect(command.subCommands).toHaveProperty("dump");
   });
 });

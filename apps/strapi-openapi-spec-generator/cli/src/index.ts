@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 
+import type { DumpOptions } from "@ryangreenup/strapi-openapi-spec-generator-lib";
 import type { CommandDef } from "citty";
 
 import tab from "@bomb.sh/tab/citty";
-import { generateSpecification } from "@ryangreenup/strapi-openapi-spec-generator-lib";
+import {
+  dump,
+  generateSpecification,
+} from "@ryangreenup/strapi-openapi-spec-generator-lib";
 import { defineCommand, runMain } from "citty";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const ARG_START_INDEX = 2;
@@ -55,6 +59,72 @@ const generate = async (args: GenerateArguments): Promise<void> => {
   );
 };
 
+const reportError = (error: unknown): void => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exitCode = 1;
+};
+
+const dumpCommand = defineCommand({
+  meta: {
+    name: "dump",
+    description:
+      "Export Strapi documents by publication status. Set STRAPI_API_TOKEN to a token with read access.",
+  },
+  args: {
+    out: {
+      type: "positional",
+      required: true,
+      description: "New or empty directory for documents and manifest.json.",
+    },
+    spec: {
+      type: "string",
+      required: true,
+      description: "Path to the generated OpenAPI JSON file.",
+    },
+    url: {
+      type: "string",
+      required: true,
+      description: "Strapi instance URL without the REST prefix.",
+    },
+    media: {
+      type: "boolean",
+      default: false,
+      description: "Download original media files.",
+    },
+    validate: {
+      type: "boolean",
+      default: true,
+      description: "Validate responses against the specification.",
+      negativeDescription: "Skip response schema validation.",
+    },
+  },
+  run: async ({ args }) => {
+    try {
+      const token = process.env["STRAPI_API_TOKEN"];
+      if (token === undefined || token === "") {
+        throw new Error("Set STRAPI_API_TOKEN to a token with read access.");
+      }
+      const specification = JSON.parse(
+        await readFile(path.resolve(args.spec), "utf8"),
+      ) as DumpOptions["specification"];
+      const out = path.resolve(args.out);
+      const manifest = await dump({
+        specification,
+        baseUrl: args.url,
+        token,
+        out,
+        media: args.media,
+        validate: args.validate,
+      });
+      console.log(
+        `Documents: ${manifest.entries.length}. Manifest: ${path.join(out, "manifest.json")}`,
+      );
+    } catch (error: unknown) {
+      reportError(error);
+    }
+  },
+});
+
 /**
  * Configure the CLI.
  *
@@ -64,11 +134,12 @@ const createCliCommand = (): CommandDef =>
   defineCommand({
     default: "generate",
     meta: {
-      description: "CLI to generate Strapi API OpenAPI Spec",
+      description: "Generate a Strapi OpenAPI specification or dump content.",
       name: "strapi-openapi-spec-generator-cli",
       version: "0.0.1",
     },
     subCommands: {
+      dump: dumpCommand,
       generate: defineCommand({
         args: {
           "cache-dir": {
@@ -106,9 +177,7 @@ const createCliCommand = (): CommandDef =>
               serverUrl: args["server-url"],
             });
           } catch (error: unknown) {
-            // The message already says what to do: a stack trace would bury it.
-            console.error(error instanceof Error ? error.message : error);
-            process.exitCode = 1;
+            reportError(error);
           }
         },
       }),

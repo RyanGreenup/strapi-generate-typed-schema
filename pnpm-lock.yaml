@@ -395,6 +395,12 @@ importers:
       '@typescript/native':
         specifier: 'catalog:'
         version: typescript@7.0.2
+      ajv:
+        specifier: 'catalog:'
+        version: 8.20.0
+      ajv-formats:
+        specifier: 'catalog:'
+        version: 3.0.1(ajv@8.20.0)
       ttsc:
         specifier: 'catalog:'
         version: 0.37.1(typescript@6.0.3)
@@ -420,12 +426,6 @@ importers:
       '@vitest/coverage-v8':
         specifier: 'catalog:'
         version: 5.1.0(@vitest/browser@5.1.0)(vitest@5.1.0)
-      ajv:
-        specifier: 'catalog:'
-        version: 8.20.0
-      ajv-formats:
-        specifier: 'catalog:'
-        version: 3.0.1(ajv@8.20.0)
       bumpp:
         specifier: 'catalog:'
         version: 12.3.0

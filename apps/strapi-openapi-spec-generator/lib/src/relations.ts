@@ -6,11 +6,6 @@ import { isUnknownArray, toRecord } from "./json.js";
 import { schemaRefName } from "./schema-names.js";
 
 type Model = Pick<ContentType, "attributes" | "uid">;
-interface RelationContext {
-  relations: JsonSchema;
-  schemas: Record<string, JsonSchema>;
-  visited: WeakSet<JsonSchema>;
-}
 
 // Strapi metadata that the generated declarations drop, but a client needs to
 // tell an owning relation from its inverse or to read per-field intent.
@@ -55,27 +50,41 @@ const setRelations = (schema: JsonSchema, relations: JsonSchema): void => {
   }
 };
 
-/** Annotate each object schema of a response root, through its refs and unions. */
-function annotate(schema: JsonSchema, context: RelationContext): void {
-  if (context.visited.has(schema)) {
-    return;
-  }
-  context.visited.add(schema);
-  const { $ref: reference } = schema;
-  const target =
-    typeof reference === "string" ? schemaRefName(reference) : undefined;
-  if (target !== undefined) {
-    const next = context.schemas[target];
-    if (next !== undefined) {
-      annotate(next, context);
+/** Visit a model's concrete response objects, but not their nested property schemas. */
+const visitResponseObjects = (
+  uid: string,
+  roots: SchemaRoot[],
+  schemas: Record<string, JsonSchema>,
+  visit: (schema: JsonSchema) => void,
+): void => {
+  const seen = new WeakSet<JsonSchema>();
+  const walk = (schema: JsonSchema): void => {
+    if (seen.has(schema)) {
+      return;
     }
-    return;
+    seen.add(schema);
+    const { $ref: reference } = schema;
+    const target =
+      typeof reference === "string" ? schemaRefName(reference) : undefined;
+    if (target !== undefined && schemas[target] !== undefined) {
+      walk(schemas[target]);
+    }
+    for (const branch of branchesOf(schema)) {
+      walk(toRecord(branch));
+    }
+    if (schema["properties"] !== undefined) {
+      visit(schema);
+    }
+  };
+  for (const root of roots) {
+    if (root.uid === uid && root.mode === "response") {
+      const schema = schemas[root.name];
+      if (schema !== undefined) {
+        walk(schema);
+      }
+    }
   }
-  for (const branch of branchesOf(schema)) {
-    annotate(toRecord(branch), context);
-  }
-  setRelations(schema, context.relations);
-}
+};
 
 /**
  * Copy source relation metadata onto response schemas as `x-strapi-relations`.
@@ -93,21 +102,13 @@ const applyRelations = (
   schemas: Record<string, JsonSchema>,
 ): void => {
   for (const { uid, attributes } of models) {
-    const context: RelationContext = {
-      relations: relationMetadata(attributes),
-      schemas,
-      visited: new WeakSet(),
-    };
-    const responses = roots.filter(
-      (root) => root.uid === uid && root.mode === "response",
-    );
-    for (const { name } of responses) {
-      const schema = schemas[name];
-      if (schema !== undefined && Object.keys(context.relations).length > 0) {
-        annotate(schema, context);
-      }
+    const relations = relationMetadata(attributes);
+    if (Object.keys(relations).length > 0) {
+      visitResponseObjects(uid, roots, schemas, (schema) => {
+        setRelations(schema, relations);
+      });
     }
   }
 };
 
-export { applyRelations };
+export { applyRelations, visitResponseObjects };

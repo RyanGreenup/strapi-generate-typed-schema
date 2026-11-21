@@ -29,6 +29,7 @@ type CoreAction = (typeof CORE_ROUTES)["collectionType"][number][0];
 /** A content API route with a lowercase method and a path relative to the REST prefix. */
 interface Route {
   auth: boolean;
+  coreAction?: CoreAction;
   handler: string | undefined;
   method: string;
   path: string;
@@ -92,6 +93,7 @@ const readCoreRouter = (
     if (included && !excluded) {
       result.routes.push({
         auth: toRecord(settings[action])["auth"] !== false,
+        coreAction: action,
         handler: `${model.uid}.${action}`,
         method,
         path: `${base}${suffix}`,
