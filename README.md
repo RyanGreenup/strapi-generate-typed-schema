@@ -14,12 +14,11 @@ If you want really narrow types so you can stop guessing in your frontend.
 
 Close the tab if:
 
-1. You're not using GraphQL
+1. You're using GraphQL
    - GraphQL gives you types for free, so you don't want this.
    - However, the query complexity and database load using the GraphQL plugin
      means this is not an option.
-2. You're happy with [Strapi Typed Client] [^@e4623bb]  
-   TypeScript CLI, library, SolidJS web apps, and a Rust-backed OpenTUI example.
+2. You're happy with [Strapi Typed Client] [^@e4623bb]
 3. The amount of LLM generated code bothers you
    - In my defense
      - Nobody wants to type Strapi's API, not even the Strapi maintainers
@@ -38,7 +37,8 @@ To write the OpenAPI spec `specification.json` into the project generate the
 strapi types and call the CLI:
 
 > [!NOTE]
-> This is read-only, it uses the types from the Strapi project.
+> This reads the Strapi types, writes the specification to the project and
+> writes compiler files to the cache.
 >
 > Strapi is not started, no database is required.
 
@@ -70,9 +70,10 @@ The CLI has some configuration:
 1. Content types come from `src/api/*/content-types/*/schema.json`.
 2. Routes come from `src/api/*/routes/*`
 3. Request and response schemas come from the types in
-   `lib/templates/rest-types.ts`. The library copies that file and a generated
-   entry file into a work directory in the cache, and [typia](https://typia.io)
-   turns the types into JSON Schema under `ttsx`.
+   `apps/strapi-openapi-spec-generator/lib/templates/rest-types.ts`. The library
+   copies that file and generated discovery and entry files into a work
+   directory in the cache, and [typia](https://typia.io) turns the types into
+   JSON Schema under `ttsx`.
 
    The first run on a machine compiles the typia plugin, which takes a few
    minutes, subsequent runs are only a few seconds.
@@ -93,277 +94,139 @@ it shouldn't write a broken spec. If a schema reaches the document without a
 model role for its name, it will fall back to typia's generated name and the
 result has a warning.
 
-### Response constraints
+### Response Constraints and Assumptions
 
-Generated response schemas preserve the restrictions in the project's generated
-Strapi types: string `minLength`/`maxLength`, email format, numeric `min`/`max`,
-and component item counts. For example, a published string with `minLength: 5`
-and `maxLength: 10` produces those OpenAPI keywords; a generated validator can
-reject a four-character value without a separate handwritten rule. String
-attributes without an explicit maximum use Strapi's default `maxLength: 255`.
+#### Overview
 
-Draft-and-publish content types expose separate status shapes, such as
-`ApiArticleArticlePublishedDocument` and `ApiArticleArticleDraftDocument`. The
-ordinary `ApiArticleArticleDocument` and operation response schemas accept
-either state:
+The generated response schema has a few limitations:
 
-| Restriction                                       | Published response | Draft response |
-| ------------------------------------------------- | ------------------ | -------------- |
-| String minimum length and email format            | Enforced           | Relaxed        |
-| String maximum length                             | Enforced           | Enforced       |
-| Numeric minimum                                   | Enforced           | Relaxed        |
-| Numeric maximum and integer type                  | Enforced           | Enforced       |
-| Component minimum/maximum item count              | Enforced           | Relaxed        |
-| Required scalar or component value, when returned | Non-null           | Nullable       |
+1. Keys marked as optional
+   - Attribute keys are optional, as `fields` and `populate` can omit required
+     fields.
+   - Note that IDs remain required
+2. Relations and media may be `null`.
+3. Strings without a configured maximum default to 255 characters. Draft and
+4. Optional component arrays can be empty even with a minimum.
 
-Every attribute key remains optional because `fields` and `populate` can omit
-it; `required` does not mean that a response always includes that key. IDs stay
-required. Relations and media can still be null. The query layer propagates the
-selected publication state to related content types that support
-draft-and-publish; targets without that feature keep their normal validated
-shape. Nested components inherit their parent's status restrictions. Optional
-component arrays may be empty even when they declare a minimum count; the
-minimum applies to nonempty arrays, or to required arrays.
+#### Draft and Published
 
-When returned, `publishedAt` distinguishes the published date-time from draft
-null. When `fields` omits it, the generic response must accept either shape;
-consumers that know the requested status can use the status-specific schema.
-Content types without draft-and-publish use the published restrictions directly.
-Nullable relations retain `null` as a separate alternative while grouping their
-overlapping draft/published variants under the document's `anyOf` schema.
+##### Behaviour
+
+For Draft and published content note the following:
+
+1. Draft-and-publish models have both `*PublishedDocument` and `*DraftDocument`
+   schemas and the ordinary `*Document` accepts either.
+
+   | Schema                                               | Use                                                     |
+   | ---------------------------------------------------- | ------------------------------------------------------- |
+   | `*PublishedCreateRequest`, `*PublishedUpdateRequest` | Published writes; the operation's default `requestBody` |
+   | `*DraftCreateRequest`, `*DraftUpdateRequest`         | Draft writes; see `x-strapi-request-status.schemas`     |
+
+2. The `publishedAt` field is a date-time for published documents and null for
+   drafts.
+3. Components
+   - Child
+     - Components inherit their parent's state
+   - Related
+     - Related draft-and-publish models follow the requested state.
+4. Other models use published restrictions.
+
+Published types have some differences in strictness, this was required for the
+[strapi-instant-preview] implementation in a client project [^6a32955]:
+
+[^6a32955]: Specifically [John Holland's brochure site]
+
+[strapi-instant-preview]: https://github.com/RyanGreenup/strapi-instant-preview
+[John Holland's brochure site]: https://johnholland.com.au/
+
+| Constraint                                       | Published | Draft    |
+| ------------------------------------------------ | --------- | -------- |
+| String minimum, email format, numeric minimum    | Enforced  | Relaxed  |
+| String maximum, numeric maximum, integer type    | Enforced  | Enforced |
+| Component item counts                            | Enforced  | Relaxed  |
+| Required scalar or component value when returned | Non-null  | Nullable |
 
 ### Request states
 
-Draft-and-publish operations expose `*DraftCreateRequest`,
-`*PublishedCreateRequest`, `*DraftUpdateRequest`, and `*PublishedUpdateRequest`
-component schemas. The operation's `requestBody` uses the published schema,
-matching REST requests without `status`. For `status=draft`, use the draft
-schema in `x-strapi-request-status.schemas`: OpenAPI cannot select a body schema
-based on a query parameter.
-
-For integer, float, and decimal inputs, the schema accepts numbers and signed
-decimal strings with an optional exponent. This is a client-side syntax check,
-not Strapi's coercion algorithm. For an integer bounded to 0–10, `"3.5"` and
-`"11"` pass the string pattern but fail after casting. Conversely, Strapi can
-cast `" 3 "` and `"0x3"`, which the client pattern rejects. Responses remain
-numeric.
-
-Draft input relaxes required scalar values, minimum lengths/ranges, email
-format, and UID patterns, while retaining scalar upper bounds. Components
-inherit the write state. Repeatable-component and dynamic-zone arrays remain
-non-null when sent; required arrays without defaults must be supplied on
-creation, even for drafts. Scalar defaults allow required fields to be omitted
-on creation. Updates allow omitted fields. Existing component IDs permit partial
-component updates; new components in a published update use creation
-requirements.
-
-System attributes and `writable: false` fields are excluded from inputs.
-Relation and media `required` markers do not make request fields mandatory:
-Strapi's `api.documents.strictRelations` defaults to false. The generator does
-not execute application configuration, check relation existence, or prove that a
-merged update is publishable. Projects enabling strict relation checks need
-additional runtime validation.
+- Updates
+  - Updates may omit fields
+  - existing components identified by `id` accept partial updates.
+  - New components in published updates use create requirements.
+- Required repeatable-component
+  - Required repeatable-component and dynamic-zone arrays that don't have
+    defaults
+    - Must be provided on creation, even for drafts. These arrays cannot be null
+      when sent.
+- Defaults
+  - Defaults allow required scalar fields to be omitted on creation.
+    - System and `writable: false` attributes are excluded.
+- Relations and Media Fields
+  - Relation and media fields are not mandatory simply because they are marked
+    required.
+    - The generator does not evaluate `api.documents.strictRelations`, check
+      relation existence or validate the merged document for publication.
+- Numeric inputs
+  - Numeric inputs accept numbers or signed decimal strings with an optional
+    exponent.
+  - The string pattern checks syntax, not Strapi's coercion or bounds, e.g.
+    `"11"` can pass the pattern for a field capped at 10, while values Strapi
+    can cast, such as `" 3 "` or `"0x3"`, do not. Responses remain numeric.
 
 ### Conditional fields
 
-For source `conditions.visible` rules, visible fields retain their validation
-constraints, while invisible fields do not remain unconditionally required.
-Creation conditions account for schema defaults; update conditions use only the
-written payload, matching Strapi's validator. Response attribute keys stay
-optional for `fields` and `populate`. When a response omits a discriminator,
-visibility is unknown, so the schema does not impose visibility-dependent
-constraints that could reject a valid projection.
+`conditions.visible` rules are validated for visible fields without making
+hidden fields required unconditionally.
 
-The generator translates primitive equality/inequality (`==`, `!=`, `===`,
-`!==`), `and`, `or`, `!`, and membership in literal arrays. Coercive comparisons
-are translated only where their matching values can be represented. Unsupported
-expressions produce a warning and conservative validation instead of an invented
-guarantee. The original rules remain in `x-strapi-conditions`.
+| Condition                                                                 | Generated behavior                                                                                  |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Primitive equality/inequality, `and`, `or`, `!`, literal-array membership | Translated when representable                                                                       |
+| Unsupported expression                                                    | Warning and conservative validation                                                                 |
+| Hidden input                                                              | Unconstrained                                                                                       |
+| Hidden scalar response                                                    | Primitive shape or null, without validation bounds                                                  |
+| Hidden structured response                                                | Public references and relaxed `*Unvalidated` shapes preserve structure and component discriminators |
 
-Hidden input values are unconstrained because Strapi skips their entity
-validation. Hidden scalar responses retain their JSON primitive shape and allow
-null, without validation bounds. Hidden structured responses retain public model
-references alongside recursively relaxed `*Unvalidated` shapes. Those
-alternatives preserve JSON structure and component discriminators without
-reintroducing nested required, format, or length rules that Strapi skipped.
-Persistence and serialization can still reject or transform values; these
-schemas do not replace running the API.
+Original rules are preserved in `x-strapi-conditions`.
 
 ### Core query parameters
 
-`fields` accepts comma-separated names or an array of those strings. Use `*`
-alone to request unrestricted selection. `*,title` and `["*", "title"]` are
-equivalent lists; do not rely on a mixed wildcard to narrow the response.
-Selectability follows the model's declared attribute kinds, not the JSON shape
-of the response: JSON and rich-text blocks are selectable, but components and
-relations require `populate`. The generator excludes passwords and private
-fields, including names in the model's `options.privateAttributes`. Runtime-only
-fields and privacy settings are not visible to static analysis.
+> [!NOTE]
+> Passwords and statically declared private fields are excluded from `fields`.
 
-Use `page` and `pageSize` for page-based pagination, or `start` and `limit` for
-offset-based pagination. Mixing the two families is invalid, even if only one
-key from each family is present. The schema accepts `limit: -1`. Its remaining
-bounds and `withCount` spellings describe recommended client input, not every
-value the service accepts. For example, Strapi 5.62 normalizes `pageSize: 0` and
-`limit: -2` to a limit of 1, and accepts `withCount: "f"`.
+| Parameter          | Behavior                                                                                                                            |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `fields`           | Comma-separated names or an array of strings; use `*` alone for unrestricted selection. Mixed wildcards do not narrow the response. |
+| `populate`         | Selects components and relations; JSON and rich-text blocks are selectable with `fields`.                                           |
+| `page`, `pageSize` | Page-based pagination; do not mix with `start` or `limit`.                                                                          |
+| `start`, `limit`   | Offset pagination; `limit: -1` is accepted by the schema.                                                                           |
 
-### Attribute metadata
+### Metadata
 
-The generator reads configured attribute facts from Strapi declarations,
-including attributes added during registration. Explicit keys in model JSON take
-precedence: a `null` default stays `null`, and a media category list keeps its
-order. Runtime-only configuration is not available offline.
+| Metadata                          | Meaning                                                                                                                     |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `default`                         | Create-time default; not advertised on responses or evaluated if it is a function.                                          |
+| `x-strapi-unique`                 | Configured uniqueness, not a guarantee about drafts or database state.                                                      |
+| `x-strapi-allowed-types`          | Configured media categories, not MIME types or attachment validation.                                                       |
+| `x-strapi-coerces-numeric-string` | Numeric input accepts a string subject to the syntax limitation above.                                                      |
+| `x-strapi-configured-bounds`      | Configured numeric bounds, not necessarily effective validation rules.                                                      |
+| `x-strapi-relations`              | Source relation, target, ownership fields and non-empty plugin options for emitted relation properties on response objects. |
 
-`default` describes an omitted field on creation. In a published component
-update, an entry without an `id` is new and gets create-time defaults; an
-existing entry keeps its omitted values. Responses do not advertise defaults,
-and the generator never evaluates a default function.
+## Development
 
-`x-strapi-unique` describes configuration, not a guarantee about a draft or the
-current database. `x-strapi-allowed-types` lists configured media categories,
-not MIME types or checks performed when a file is attached.
+| Command                            | Purpose                                                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `pnpm install`                     | Install workspace dependencies                                                                    |
+| `pnpm run build`                   | Build workspace packages                                                                          |
+| `pnpm run test`                    | Run unit tests                                                                                    |
+| `pnpm run test:e2e`                | Build and test the CLI executable                                                                 |
+| `pnpm run check`                   | Check scripts, lockfile, dependency versions, build, lint, types, tests and dependency boundaries |
+| `pnpm run deps:cruise`             | Check dependency boundaries                                                                       |
+| `pnpm run format` / `pnpm run fix` | Apply formatting / fixes                                                                          |
 
-Numeric inputs carry `x-strapi-coerces-numeric-string`. The extension
-`x-strapi-configured-bounds` replaces `x-strapi-post-coercion-bounds`: its
-`minimum` and `maximum` preserve the configured numbers or strings, not the
-effective validation rules. Strapi skips minimums for draft writes, retains
-maximums, and truncates configured integer bounds before checking them.
-
-### Relation metadata
-
-Strapi's generated declarations do not say which side of a relation owns it.
-Each response schema of a model with relations gets an `x-strapi-relations` map,
-keyed by field, with the source `relation`, `target`, `mappedBy`, `inversedBy`,
-and any non-empty `pluginOptions`. Clients can use it to skip inverse relations
-or to read per-field intent, such as a populate depth. Plugin types overridden
-in `src/extensions` are covered too.
-
-### Limits
-
-- A custom handler gets its path, parameters and security, but no body schemas.
-  A custom route whose handler is a core action (for example
-  `api::page.page.findOne`) gets the core schemas.
-- Plugin routes (upload, users-permissions, i18n) are not included.
-- Unsupported validation rules include custom validators and biginteger ranges.
-  For published writes, the generator reads string-like attributes' `regex`
-  rules from model JSON. A custom UID pattern replaces its built-in pattern.
-  Drafts, responses, and conditionally hidden fields do not inherit these
-  checks. Strapi uses flagless JavaScript regexes; JSON Schema validators use
-  Unicode matching. The generator enforces a conservative subset and emits a
-  warning and `x-strapi-regex` metadata for unsupported expressions.
-- Response restrictions describe the core REST API; custom controllers,
-  middleware, or direct database writes can bypass Strapi's validation.
-- Regenerate Strapi declarations after schema edits. The generator combines
-  those declarations with source JSON; stale declarations or registration hooks
-  that change schemas can make the two inputs disagree.
-
-## Rust example
+Run the CLI from the workspace:
 
 ```sh
-pnpm exec turbo run build --filter=@ryangreenup/strapi-openapi-spec-generator-rs
-./apps/strapi-openapi-spec-generator-rs/target/release/cli add
-```
-
-Turbo hashes only the crates' sources, the Cargo manifests, `Cargo.lock` and
-`rust-toolchain.toml`, and caches only the `cli` binary; `target/` is cargo's
-own incremental cache. A pre-commit hook runs `cargo fmt` when `.rs` files in
-this workspace are staged. Delete the directory and its line in
-`pnpm-workspace.yaml` if you do not need it.
-
-The following independent web apps are included under `apps/storybook/`:
-
-| Directory                                | Stack                                        |
-| ---------------------------------------- | -------------------------------------------- |
-| `web-app`                                | SolidJS + Vite                               |
-| `web-app-with-storybook`                 | SolidJS + Vite + Storybook, plain CSS        |
-| `web-app-with-storybook-tailwind`        | SolidJS + Vite + Storybook + Tailwind CSS    |
-| `web-app-with-storybook-vanilla-extract` | SolidJS + Vite + Storybook + vanilla-extract |
-
-Delete any app directories you do not want, then run `pnpm install` to refresh
-the lockfile. No workspace-glob or shared-package changes are required. Keep
-Node 26+ while using these web apps.
-
-The shared presets inherit `@tsconfig/strictest` and require erasable syntax,
-type-only imports, and explicit exported declaration types. TypeScript checks
-without emitting; `tsdown` emits JavaScript and declarations using the `tsgo`
-generator. The Strapi preset keeps its independent CommonJS build settings.
-
-## Commands
-
-```sh
-pnpm install
-pnpm run build
-pnpm run test
-pnpm run check
 pnpm --dir apps/strapi-openapi-spec-generator/cli run cli -- generate path/to/strapi-project
 ```
 
-`check` validates package scripts, the lockfile and catalog versions, then runs
-build, lint, type checks, unit tests, and the CLI end-to-end tests without
-running source-writing `format` or `fix` tasks. Dependency boundaries are
-checked last, because they resolve built and generated files. Run
-`pnpm run format` and `pnpm run fix` explicitly to apply changes before
-checking. Run `pnpm run test:e2e` to build the CLI and its dependencies before
-testing the built executable.
-
-Run `pnpm run deps:cruise` to check dependency boundaries on their own. It runs
-dependency-cruiser in each workspace package with a `tsconfig.json`, using the
-shared `.dependency-cruiser.cjs` rules.
-
-Turbo caches `test:coverage` output under each package's `coverage/` directory.
-Lint tasks also track the workspace `.gitignore`; the shared ESLint package
-tracks workspace manifests and Turbo configs because its Turbo rule reads them.
-
-## Web apps and Storybook
-
-Run one app or Storybook variant at a time; all apps default to Vite port 3000,
-and all Storybooks default to port 6006. Override the port when running more
-than one.
-
-```sh
-pnpm --dir apps/storybook/web-app run dev
-pnpm --dir apps/storybook/web-app-with-storybook run storybook
-pnpm --dir apps/storybook/web-app-with-storybook run build-storybook
-pnpm --dir apps/storybook/web-app-with-storybook exec playwright install chromium
-pnpm --dir apps/storybook/web-app-with-storybook exec vitest run --project storybook
-```
-
-Substitute either styling variant's directory to use Tailwind or
-vanilla-extract. The root build/check tasks include all retained web apps. Build
-Storybooks and run their browser tests separately using the commands above; each
-app README lists its scripts. Linux hosts may need
-`playwright install-deps chromium`.
-
-## Terminal UI example
-
-`apps/tui/app` runs the SolidJS/OpenTUI list example, `apps/tui/ui` provides the
-component kit and themes, and `apps/tui/lib` owns the list model in Rust through
-N-API bindings. Install Bun, Rust/Cargo, and a native linker toolchain before
-building or checking these packages. `pnpm install` installs Lefthook hooks when
-Git is initialized. If you initialize Git later, run `pnpm run prepare` to
-install the hooks.
-
-```sh
-pnpm exec turbo run build --filter=@ryangreenup/opentui-template-app...
-pnpm --dir apps/tui/app run start
-```
-
-Build through Turbo so the native backend and component kit are ready, then run
-the app directly so it owns the terminal. Use `j`/`k` or arrow keys to move,
-Enter to choose, `t` to cycle themes, and `q` to quit. To supply your own items
-or run the compiled executable:
-
-```sh
-pnpm --dir apps/tui/app run start first second third
-./apps/tui/app/dist/rust-example first second third
-```
-
-The root build/check tasks include all three TUI packages. Keep the TUI's named
-catalogs: its Solid runtime must match its JSX compiler. Delete `apps/tui/` and
-run `pnpm install` if you do not need the terminal example or Rust toolchain.
-
-## Shell completions
-
-`mise` enter hooks build the CLI, `bun link` it, and source
-`strapi-openapi-spec-generator-cli complete <shell>` for fish, bash and zsh. Set
-`cli_auto_setup = false` under `[vars]` in `mise.toml` to turn all of that off.
+`mise` enter hooks build and link the CLI, which is equally convenient and
+annoying, set `cli_auto_setup = false` in `mise.toml` to disable the hooks.
