@@ -11,7 +11,10 @@ interface Probe {
 type Variant = [
   generic: string,
   name: string,
-  mode?: NonNullable<Identity["mode"]>,
+  mode?:
+    | NonNullable<Identity["mode"]>
+    | "componentUpdateDispatch"
+    | { requestInput: string },
   flags?: string,
   publishedInput?: boolean,
 ];
@@ -36,7 +39,9 @@ for (const state of ["Published", "Draft"]) {
       dispatchVariants.push([
         `${kind}Input`,
         `${state}${action}${kind}Helper`,
-        mode,
+        state === "Published" && action === "Update"
+          ? "componentUpdateDispatch"
+          : mode,
         flags,
         state === "Published",
       ]);
@@ -51,11 +56,15 @@ const componentVariants: readonly Variant[] = [
   ["PublishedNewZoneInput", "PublishedNewBlockInput", "create"],
   ["PublishedCreateComponentInput", "PublishedCreateEntryInput", "create"],
   ["DraftCreateComponentInput", "DraftCreateEntryInput", "create"],
-  ["PublishedComponentInput", "PublishedEntryInput", "create"],
+  ["PublishedComponentInput", "PublishedEntryInput", "componentUpdateDispatch"],
   ["DraftComponentInput", "DraftEntryInput", "update"],
   ["PublishedCreateZoneInput", "PublishedCreateBlockInput", "create"],
   ["DraftCreateZoneInput", "DraftCreateBlockInput", "create"],
-  ["PublishedUpdateZoneInput", "PublishedUpdateBlockInput", "update"],
+  [
+    "PublishedUpdateZoneInput",
+    "PublishedUpdateBlockInput",
+    "componentUpdateDispatch",
+  ],
   ["DraftUpdateZoneInput", "DraftUpdateBlockInput", "update"],
   ...dispatchVariants,
 ];
@@ -87,7 +96,11 @@ const operationVariants = (model: ContentType): Variant[] => {
           "",
           state === "Published",
         ],
-        [`Rest${state}${action}Body`, `${prefix}${state}${action}Request`],
+        [
+          `Rest${state}${action}Body`,
+          `${prefix}${state}${action}Request`,
+          { requestInput: `${prefix}${state}${action}Input` },
+        ],
       );
     }
     variants.push(
@@ -98,7 +111,11 @@ const operationVariants = (model: ContentType): Variant[] => {
         "",
         !model.draftAndPublish,
       ],
-      [`Rest${action}Body`, names[mode]],
+      [
+        `Rest${action}Body`,
+        names[mode],
+        { requestInput: `${prefix}${action}Input` },
+      ],
     );
   }
   return variants;
@@ -119,10 +136,17 @@ const modelProbes = ({
   ): Probe => {
     const type = `T.${generic}<${argument}${flags}>`;
     const identity: Identity = { uid, name };
-    if (mode !== undefined) {
+    if (typeof mode === "object") {
+      identity.requestInput = mode.requestInput;
+    } else if (mode === "componentUpdateDispatch") {
+      identity.mode = "update";
+      identity.componentUpdateDispatch = true;
+    } else if (mode !== undefined) {
       identity.mode = mode;
     }
-    if (publishedInput) identity.publishedInput = true;
+    if (publishedInput) {
+      identity.publishedInput = true;
+    }
     if (state !== undefined) {
       identity.state = state;
     }

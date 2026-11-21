@@ -591,7 +591,7 @@ describe("generated response validation", () => {
       } else {
         expect(properties["rating"]).toMatchObject({
           "x-strapi-coerces-numeric-string": true,
-          "x-strapi-post-coercion-bounds": { minimum: 2, maximum: 8 },
+          "x-strapi-configured-bounds": { minimum: 2, maximum: 8 },
         });
       }
     }
@@ -619,7 +619,7 @@ describe("generated response validation", () => {
         ]),
       });
       expect(toRecord(schema?.["properties"])["weight"]).not.toHaveProperty(
-        "x-strapi-post-coercion-bounds",
+        "x-strapi-configured-bounds",
       );
     }
     expect(

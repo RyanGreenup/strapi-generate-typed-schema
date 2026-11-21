@@ -29,6 +29,21 @@ export interface ApiArticleArticle extends Struct.CollectionTypeSchema {
       Schema.Attribute.DefaultTo<"default">;
     slug: Schema.Attribute.UID &
       Schema.Attribute.SetMinMaxLength<{ minLength: 3; maxLength: 12 }>;
+    registeredCount: Schema.Attribute.Integer &
+      Schema.Attribute.SetMinMax<{ min: "2.9"; max: "8.1" }, string> &
+      Schema.Attribute.DefaultTo<0>;
+    registeredPrice: Schema.Attribute.Decimal &
+      Schema.Attribute.SetMinMax<{ min: "-0.5"; max: "8.1" }, string>;
+    registeredFlag: Schema.Attribute.Boolean &
+      Schema.Attribute.DefaultTo<false>;
+    registeredData: Schema.Attribute.JSON &
+      Schema.Attribute.DefaultTo<{ labels: ["initial"]; enabled: false }>;
+    registeredKey: Schema.Attribute.String & Schema.Attribute.Unique;
+    registeredMedia: Schema.Attribute.Media<"videos" | "files">;
+    runtimeDefault: Schema.Attribute.String &
+      Schema.Attribute.DefaultTo<() => string>;
+    nullableDefault: Schema.Attribute.String &
+      Schema.Attribute.DefaultTo<"stale">;
     shortText: Schema.Attribute.String;
     summary: Schema.Attribute.Component<"shared.seo", false>;
     link: Schema.Attribute.Component<"shared.conditional-link", false>;
@@ -99,7 +114,9 @@ export interface PluginUploadFile extends Struct.CollectionTypeSchema {
     width: Schema.Attribute.Integer;
     height: Schema.Attribute.Integer;
     formats: Schema.Attribute.JSON;
-    hash: Schema.Attribute.String & Schema.Attribute.Required;
+    hash: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.Unique;
     ext: Schema.Attribute.String;
     mime: Schema.Attribute.String & Schema.Attribute.Required;
     size: Schema.Attribute.Decimal & Schema.Attribute.Required;
@@ -128,7 +145,8 @@ export interface SharedConditionalLink extends Struct.ComponentSchema {
   attributes: {
     active: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
     weight: Schema.Attribute.Float & Schema.Attribute.DefaultTo<0>;
-    attachment: Schema.Attribute.Media<"images" | "files", false>;
+    // The source narrows this stale media union and sets its category order.
+    attachment: Schema.Attribute.Media<"files" | "images" | "videos", false>;
     kind: Schema.Attribute.Enumeration<["internal", "external"]> &
       Schema.Attribute.Required &
       Schema.Attribute.DefaultTo<"internal">;

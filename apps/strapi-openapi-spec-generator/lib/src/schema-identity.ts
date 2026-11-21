@@ -8,6 +8,10 @@ interface SchemaRoot {
   uid?: string;
   mode?: ConditionContext["mode"];
   publishedInput?: true;
+  /** A published nested update dispatches by id: present = existing, absent = new. */
+  componentUpdateDispatch?: true;
+  /** The probed input type used by the request wrapper's data property. */
+  requestInput?: string;
   state?: "document" | "published" | "draft";
   schema: unknown;
 }
@@ -17,18 +21,34 @@ interface Emission {
   roots: SchemaRoot[];
 }
 
-const isRoot = (value: unknown): value is SchemaRoot => {
-  const { name, uid, mode, state, publishedInput, schema } = toRecord(value);
+const hasValidRole = (value: Record<string, unknown>): boolean => {
+  const { mode, publishedInput, componentUpdateDispatch, requestInput } = value;
   return (
-    typeof name === "string" &&
-    name !== "" &&
-    (uid === undefined || typeof uid === "string") &&
     (mode === undefined ||
       mode === "create" ||
       mode === "update" ||
       mode === "response") &&
     (publishedInput === undefined ||
       (publishedInput === true && (mode === "create" || mode === "update"))) &&
+    (componentUpdateDispatch === undefined ||
+      (componentUpdateDispatch === true &&
+        publishedInput === true &&
+        mode === "update")) &&
+    (requestInput === undefined ||
+      (typeof requestInput === "string" &&
+        requestInput !== "" &&
+        mode === undefined))
+  );
+};
+
+const isRoot = (value: unknown): value is SchemaRoot => {
+  const root = toRecord(value);
+  const { name, uid, state, schema } = root;
+  return (
+    typeof name === "string" &&
+    name !== "" &&
+    (uid === undefined || typeof uid === "string") &&
+    hasValidRole(root) &&
     (state === undefined ||
       state === "document" ||
       state === "draft" ||

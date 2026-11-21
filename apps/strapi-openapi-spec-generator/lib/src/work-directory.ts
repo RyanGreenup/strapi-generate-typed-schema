@@ -167,11 +167,7 @@ const createWorkDirectory = async (input: SchemasInput): Promise<string> => {
       target: "ES2024",
       types: [],
     },
-    include: [
-      "./entry.ts",
-      "./discovery.ts",
-      path.join(projectDirectory, "types/generated/*.d.ts"),
-    ],
+    include: ["./entry.ts", "./discovery.ts", "./generated/*.d.ts"],
   };
   // ttsc finds the typia plugin and the compiler through this manifest.
   const manifest = {

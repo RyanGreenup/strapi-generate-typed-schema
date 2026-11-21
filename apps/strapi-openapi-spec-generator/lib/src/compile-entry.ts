@@ -1,9 +1,22 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 
-import { packageDirectory } from "./work-directory.js";
+import type { DiscoveredContentType } from "./content-types.js";
+import type { Emission } from "./schema-identity.js";
+import type { MetadataModel } from "./stage-declarations.js";
+import type { SchemasInput } from "./work-directory.js";
+
+import { readEmission } from "./schema-identity.js";
+import { metadataModels, stageDeclarations } from "./stage-declarations.js";
+import {
+  createWorkDirectory,
+  packageDirectory,
+  readDiscovery,
+  writeSchemaEntry,
+} from "./work-directory.js";
 
 /** Run a staged TypeScript entry with the cached typia plugin. Return its final JSON line or throw with the compiler diagnostics. */
 const runEntry = async (
@@ -36,4 +49,38 @@ const runEntry = async (
   return output.slice(output.lastIndexOf("\n") + 1);
 };
 
-export { runEntry };
+interface Compilation {
+  emission: Emission;
+  contentTypes: DiscoveredContentType[];
+  metadata: MetadataModel[];
+}
+
+/** Run discovery and schema emission against the same staged declarations. */
+const compileProject = async (
+  input: SchemasInput,
+  sources: MetadataModel[],
+): Promise<Compilation> => {
+  const work = await createWorkDirectory(input);
+  try {
+    const declared = await stageDeclarations(input.projectDirectory, work);
+    const discovery = await runEntry(
+      work,
+      input.cacheDirectory,
+      "discovery.ts",
+    );
+    const { models, contentTypes } = readDiscovery(input, discovery);
+    await writeSchemaEntry(work, models);
+    const emission = readEmission(
+      await runEntry(work, input.cacheDirectory, "entry.ts"),
+    );
+    return {
+      emission,
+      contentTypes,
+      metadata: metadataModels(declared, models, sources),
+    };
+  } finally {
+    await rm(work, { force: true, recursive: true });
+  }
+};
+
+export { compileProject };

@@ -33,6 +33,7 @@
       "required": true
     },
     "label": { "type": "string", "required": true, "default": "default" },
+    "nullableDefault": { "type": "string", "default": null },
     "slug": { "type": "uid", "minLength": 3, "maxLength": 12 },
     "shortText": { "type": "string" },
     "summary": {

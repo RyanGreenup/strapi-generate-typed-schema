@@ -1,11 +1,9 @@
-import { rm } from "node:fs/promises";
-
 import type { DiscoveredContentType } from "./content-types.js";
 import type { JsonSchema } from "./document.js";
 import type { SchemasInput } from "./work-directory.js";
 
 import { applyAttributeMetadata } from "./attribute-metadata.js";
-import { runEntry } from "./compile-entry.js";
+import { compileProject } from "./compile-entry.js";
 import {
   applyConditions,
   readComponents,
@@ -13,17 +11,11 @@ import {
 } from "./conditions.js";
 import { publicSchemas } from "./public-schemas.js";
 import { applyRelations } from "./relations.js";
-import { readEmission } from "./schema-identity.js";
 import {
   renameSchemas,
   unnamedSchemas,
   validateSchemaRefs,
 } from "./schema-names.js";
-import {
-  createWorkDirectory,
-  readDiscovery,
-  writeSchemaEntry,
-} from "./work-directory.js";
 
 /**
  * Compile the project's declarations and apply conditions found only in model JSON.
@@ -41,39 +33,25 @@ const generateSchemas = async (
 }> => {
   const components = await readComponents(input.projectDirectory);
   const project = { ...input, components };
-  const work = await createWorkDirectory(project);
-  try {
-    const discovery = await runEntry(
-      work,
-      input.cacheDirectory,
-      "discovery.ts",
+  const extensions = await readExtensions(input.projectDirectory);
+  const models = [...input.contentTypes, ...components, ...extensions];
+  const { emission, contentTypes, metadata } = await compileProject(
+    project,
+    models,
+  );
+  const schemas = renameSchemas(emission.schemas, emission.roots);
+  warnings.push(...applyConditions(models, emission.roots, schemas));
+  applyRelations(models, emission.roots, schemas);
+  warnings.push(...applyAttributeMetadata(metadata, emission.roots, schemas));
+  const result = publicSchemas(schemas, emission.roots, input.contentTypes);
+  validateSchemaRefs(result);
+  const unnamed = unnamedSchemas(result);
+  if (unnamed.length > 0) {
+    warnings.push(
+      `Schemas kept typia's generated names because no model role covers them: ${unnamed.join(", ")}`,
     );
-    const { models: probeModels, contentTypes } = readDiscovery(
-      project,
-      discovery,
-    );
-    await writeSchemaEntry(work, probeModels);
-    const emission = readEmission(
-      await runEntry(work, input.cacheDirectory, "entry.ts"),
-    );
-    const schemas = renameSchemas(emission.schemas, emission.roots);
-    const extensions = await readExtensions(input.projectDirectory);
-    const models = [...input.contentTypes, ...components, ...extensions];
-    warnings.push(...applyConditions(models, emission.roots, schemas));
-    applyRelations(models, emission.roots, schemas);
-    warnings.push(...applyAttributeMetadata(models, emission.roots, schemas));
-    const result = publicSchemas(schemas, emission.roots, input.contentTypes);
-    validateSchemaRefs(result);
-    const unnamed = unnamedSchemas(result);
-    if (unnamed.length > 0) {
-      warnings.push(
-        `Schemas kept typia's generated names because no model role covers them: ${unnamed.join(", ")}`,
-      );
-    }
-    return { schemas: result, contentTypes };
-  } finally {
-    await rm(work, { force: true, recursive: true });
   }
+  return { schemas: result, contentTypes };
 };
 
 export { generateSchemas };

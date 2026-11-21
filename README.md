@@ -178,11 +178,25 @@ value the service accepts. For example, Strapi 5.62 normalizes `pageSize: 0` and
 
 ### Attribute metadata
 
-When model JSON is available, properties carry their source `default`,
-`x-strapi-unique`, and media `x-strapi-allowed-types` where applicable. Numeric
-inputs also carry `x-strapi-coerces-numeric-string` and, for bounded fields,
-`x-strapi-post-coercion-bounds`. These annotations neither insert defaults nor
-check database uniqueness or uploaded file types.
+The generator reads configured attribute facts from Strapi declarations,
+including attributes added during registration. Explicit keys in model JSON take
+precedence: a `null` default stays `null`, and a media category list keeps its
+order. Runtime-only configuration is not available offline.
+
+`default` describes an omitted field on creation. In a published component
+update, an entry without an `id` is new and gets create-time defaults; an
+existing entry keeps its omitted values. Responses do not advertise defaults,
+and the generator never evaluates a default function.
+
+`x-strapi-unique` describes configuration, not a guarantee about a draft or the
+current database. `x-strapi-allowed-types` lists configured media categories,
+not MIME types or checks performed when a file is attached.
+
+Numeric inputs carry `x-strapi-coerces-numeric-string`. The extension
+`x-strapi-configured-bounds` replaces `x-strapi-post-coercion-bounds`: its
+`minimum` and `maximum` preserve the configured numbers or strings, not the
+effective validation rules. Strapi skips minimums for draft writes, retains
+maximums, and truncates configured integer bounds before checking them.
 
 ### Relation metadata
 
