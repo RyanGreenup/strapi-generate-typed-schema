@@ -51,7 +51,16 @@ How it works:
    seconds.
 4. Source content-type and component JSON supplies `conditions.visible`, which
    Strapi's generated declarations omit. A postprocessing pass applies those
-   rules to the generated request and response schemas.
+   rules to the generated request and response schemas. Plugin content types
+   that the project overrides in `src/extensions/<plugin>/content-types/` are
+   read too, so an edited users-permissions user keeps its rules.
+
+Schema names come from model UIDs and their roles (for example, published
+response or draft update), not from parsing typia's component names. No
+per-project naming table is required. Generation fails on ambiguous public names
+or unresolved local schema references rather than writing a broken spec. If a
+schema reaches the document without a model role to name it, it keeps typia's
+generated name and the result includes a warning.
 
 ### Response constraints
 

@@ -10,61 +10,88 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 import type { ContentType } from "./content-types.js";
+import type { Model } from "./schema-probes.js";
 
-import { ERROR_SCHEMA, pascalCase, schemaNames } from "./names.js";
+import { isUnknownArray, parseJsonObject } from "./json.js";
+import { ERROR_SCHEMA } from "./names.js";
+import { modelProbes } from "./schema-probes.js";
 
 interface SchemasInput {
   cacheDirectory: string;
+  components: { uid: string; attributes: Record<string, unknown> }[];
   contentTypes: ContentType[];
   projectDirectory: string;
 }
 
-const entrySource = (contentTypes: ContentType[]): string => {
-  const aliases = contentTypes.flatMap(({ uid, kind, draftAndPublish }) => {
-    const names = schemaNames(uid);
-    const prefix = pascalCase(uid);
-    const argument = JSON.stringify(uid);
-    const alias = (name: string, generic: string): [string, string] => [
-      name,
-      `type ${name} = ${generic}<${argument}>;`,
-    ];
-    const types = [
-      alias(`${prefix}Document`, "RestAnyDocument"),
-      alias(names.one, "RestAnyFindOne"),
-      alias(names.update, "RestUpdateBody"),
-      alias(`${prefix}PublishedUpdateRequest`, "RestPublishedUpdateBody"),
-    ];
-    if (draftAndPublish) {
-      types.push(alias(`${prefix}DraftUpdateRequest`, "RestDraftUpdateBody"));
-    }
-    if (kind !== "singleType") {
-      types.push(
-        alias(names.list, "RestAnyFind"),
-        alias(names.create, "RestCreateBody"),
-        alias(`${prefix}PublishedCreateRequest`, "RestPublishedCreateBody"),
-      );
-      if (draftAndPublish) {
-        types.push(alias(`${prefix}DraftCreateRequest`, "RestDraftCreateBody"));
-      }
-    }
-    return types;
-  });
-  const names = [...aliases.map(([name]) => name), ERROR_SCHEMA];
+// The second compiler pass must instantiate templates with UID literals. Typia
+// can otherwise materialize a different object for a conditional generic root.
+const discoverySource = ({
+  contentTypes,
+  components,
+}: SchemasInput): string => {
+  const owners = [...contentTypes, ...components]
+    .map(({ uid }) => JSON.stringify(uid))
+    .join(" | ");
   return String.raw`import typia from "typia";
-import type { RestAnyDocument, RestAnyFind, RestAnyFindOne, RestCreateBody, RestDraftCreateBody, RestDraftUpdateBody, RestPublishedCreateBody, RestPublishedUpdateBody, RestError, RestUpdateBody } from "./rest-types.ts";
-// Declared here so that the file needs no Node.js type package.
+import type { UID } from "@strapi/strapi";
+import type * as T from "./rest-types.ts";
 declare const process: { stdout: { write(text: string): void } };
-${aliases.map(([, declaration]) => declaration).join("\n")}
-const generated = typia.json.schemas<[${names.join(", ")}], "3.1">();
-const schemas = generated.components.schemas ?? {};
-const names = ${JSON.stringify(names)};
-// Keep public aliases when typia emits a union inline; referenced state objects are renamed.
-for (const [index, name] of names.entries()) {
-  const schema = generated.schemas[index]!;
-  if (!("$ref" in schema)) schemas[name] ??= schema;
-}
-process.stdout.write("\n" + JSON.stringify(schemas) + "\n");
+type Owners = ${owners === "" ? "never" : owners};
+type External = Exclude<T.ReachableModels<Owners>, Owners>;
+type Related = Extract<External, UID.ContentType>;
+const related = typia.reflect.literals<Related | "">().filter(Boolean);
+const drafts = typia.reflect.literals<T.DraftModels<Related> | "">().filter(Boolean);
+const components = typia.reflect.literals<Extract<External, UID.Component> | "">().filter(Boolean);
+process.stdout.write("\n" + JSON.stringify({ related, drafts, components }) + "\n");
 `;
+};
+
+const uids = (value: unknown): string[] => {
+  if (
+    !isUnknownArray(value) ||
+    !value.every((uid) => typeof uid === "string")
+  ) {
+    throw new Error("Invalid schema discovery output: expected a UID list");
+  }
+  return value;
+};
+
+/** Write literal schema probes for the source models and their discovered populated targets. */
+const writeSchemaEntry = async (
+  work: string,
+  { contentTypes, components }: SchemasInput,
+  output: string,
+): Promise<void> => {
+  const discovery = parseJsonObject(output);
+  const drafts = new Set(uids(discovery["drafts"]));
+  const models: Model[] = [
+    ...contentTypes.map((content) => ({
+      uid: content.uid,
+      content,
+      drafts: content.draftAndPublish,
+    })),
+    ...components.map(({ uid }) => ({ uid, component: true, drafts: true })),
+    ...uids(discovery["related"]).map((uid) => ({
+      uid,
+      drafts: drafts.has(uid),
+    })),
+    ...uids(discovery["components"]).map((uid) => ({
+      uid,
+      component: true,
+      drafts: true,
+    })),
+  ];
+  const probes = models.flatMap((model) => modelProbes(model));
+  probes.push({ type: "T.RestError", identity: { name: ERROR_SCHEMA } });
+  const entry = String.raw`import typia from "typia";
+import type * as T from "./rest-types.ts";
+declare const process: { stdout: { write(text: string): void } };
+const generated = typia.json.schemas<[${probes.map(({ type }) => type).join(",\n")}], "3.1">();
+const descriptors = ${JSON.stringify(probes.map(({ identity }) => identity))};
+const roots = descriptors.map((root, index) => ({ ...root, schema: generated.schemas[index] }));
+process.stdout.write("\n" + JSON.stringify({ schemas: generated.components.schemas ?? {}, roots }) + "\n");
+`;
+  await writeFile(path.join(work, "entry.ts"), entry);
 };
 
 /** Resolve dependencies relative to the generator or the consuming Strapi project. */
@@ -104,7 +131,7 @@ const checkProject = async (projectDirectory: string): Promise<string> => {
  * @throws If dependencies, generated declarations or cache access are missing.
  */
 const createWorkDirectory = async (input: SchemasInput): Promise<string> => {
-  const { projectDirectory, cacheDirectory, contentTypes } = input;
+  const { projectDirectory, cacheDirectory } = input;
   const strapi = await checkProject(projectDirectory);
   const parent = path.join(cacheDirectory, "work");
   await mkdir(parent, { recursive: true });
@@ -122,6 +149,7 @@ const createWorkDirectory = async (input: SchemasInput): Promise<string> => {
     },
     include: [
       "./entry.ts",
+      "./discovery.ts",
       path.join(projectDirectory, "types/generated/*.d.ts"),
     ],
   };
@@ -142,7 +170,7 @@ const createWorkDirectory = async (input: SchemasInput): Promise<string> => {
       new URL("../templates/rest-types.ts", import.meta.url),
       path.join(work, "rest-types.ts"),
     ),
-    writeFile(path.join(work, "entry.ts"), entrySource(contentTypes)),
+    writeFile(path.join(work, "discovery.ts"), discoverySource(input)),
     writeFile(path.join(work, "tsconfig.json"), JSON.stringify(tsconfig)),
     writeFile(path.join(work, "package.json"), JSON.stringify(manifest)),
   ]);
@@ -150,5 +178,5 @@ const createWorkDirectory = async (input: SchemasInput): Promise<string> => {
   return work;
 };
 
-export { createWorkDirectory, packageDirectory };
+export { createWorkDirectory, packageDirectory, writeSchemaEntry };
 export type { SchemasInput };

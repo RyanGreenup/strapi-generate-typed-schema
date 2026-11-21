@@ -8,6 +8,7 @@ import { readContentTypes } from "./content-types.js";
 import { buildDocument } from "./document.js";
 import { parseJsonObject, toOptionalString } from "./json.js";
 import { readRoutes } from "./routes.js";
+import { schemaRefName } from "./schema-names.js";
 import { generateSchemas } from "./schemas.js";
 
 /** Project root and optional overrides for the REST prefix and compiler cache. */
@@ -49,6 +50,31 @@ const readInfo = async (projectDirectory: string): Promise<DocumentInfo> => {
   };
 };
 
+// Operations contain generator-owned parameter, body, response and status descriptors.
+// Model schemas need a separate, keyword-aware walk: their examples are user data.
+const checkOperationRefs = (
+  value: unknown,
+  document: OpenApiDocument,
+): void => {
+  if (value === null || typeof value !== "object") {
+    return;
+  }
+  const entries: [string, unknown][] = Object.entries(value);
+  for (const [key, child] of entries) {
+    if (key === "$ref" && typeof child === "string" && child.startsWith("#")) {
+      const target = schemaRefName(child);
+      if (
+        target === undefined ||
+        !Object.hasOwn(document.components.schemas, target)
+      ) {
+        throw new Error(`Unresolved operation schema reference: ${child}`);
+      }
+    } else {
+      checkOperationRefs(child, document);
+    }
+  }
+};
+
 /**
  * Generate the content API contract without starting Strapi or writing to its project.
  * @param options - Project root, optional compiler cache and REST URL prefix.
@@ -78,16 +104,15 @@ export const generateSpecification = async (
     warnings,
   );
 
-  return {
-    document: buildDocument({
-      contentTypes,
-      info,
-      routes,
-      schemas,
-      serverUrl: options.serverUrl ?? "/api",
-    }),
-    warnings,
-  };
+  const document = buildDocument({
+    contentTypes,
+    info,
+    routes,
+    schemas,
+    serverUrl: options.serverUrl ?? "/api",
+  });
+  checkOperationRefs(document.paths, document);
+  return { document, warnings };
 };
 
 export type { Specification, SpecificationOptions };

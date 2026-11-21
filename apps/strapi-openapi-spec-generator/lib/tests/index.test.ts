@@ -15,7 +15,7 @@ import { buildDocument } from "../src/document.js";
 import { generateSpecification } from "../src/index.js";
 import { toRecord } from "../src/json.js";
 import { readRoutes } from "../src/routes.js";
-import { renameSchemas } from "../src/schema-names.js";
+import { renameSchemas, validateSchemaRefs } from "../src/schema-names.js";
 import { generatedFixture } from "./generated-fixture.js";
 
 vi.setConfig({ testTimeout: 5000 });
@@ -270,47 +270,243 @@ describe("buildDocument", () => {
   });
 });
 
+const ref = (name: string): { $ref: string } => ({
+  $ref: `#/components/schemas/${name}`,
+});
+
 describe("renameSchemas", () => {
-  it("preserves boolean component schemas and references to them", () => {
-    const ref = { $ref: "#/components/schemas/Never" };
+  it("retains boolean components, inline roots and flattened public aliases", () => {
     expect(
-      renameSchemas({ Never: false, Anything: true, Alias: ref }),
+      renameSchemas({ t0: false, t1: true, Extra: ref("t0") }, [
+        { name: "Never", schema: ref("t0") },
+        { name: "AlsoNever", schema: ref("t0") },
+        { name: "Anything", schema: ref("t1") },
+        { name: "Inline", schema: { items: ref("t0") } },
+        { name: "InlineFalse", schema: false },
+      ]),
     ).toStrictEqual({
       Never: { not: {} },
+      AlsoNever: ref("Never"),
       Anything: {},
-      Alias: ref,
+      Inline: { items: ref("Never") },
+      InlineFalse: { not: {} },
+      Extra: ref("Never"),
     });
   });
 
-  it("names a generic schema after its UID", () => {
-    expect(
-      renameSchemas({
-        "RestAnyDocumentapi_x3A__x3A_page_x2E_page-x7AB9B112138960C0": {},
-        RestError: {},
-      }),
-    ).toStrictEqual({ ApiPagePageDocument: {}, RestError: {} });
-  });
-
-  it("renames keys and references together", () => {
-    const generated = "PublishedComponentInputshared_x2E_seo-xF8A29A5A1753DD2C";
-    const renamed = renameSchemas({
-      [generated]: { type: "object" },
-      Page: { $ref: `#/components/schemas/${generated}` },
-    });
-
+  it("rewrites only local schema references, never property names or payloads", () => {
+    const generated = "unrelated~component/name";
+    const old = ref("unrelated~0component~1name");
+    const data = { ...old, nested: [ref("NotASchema")] };
+    const payload = {
+      title: generated,
+      description: old.$ref,
+      enum: [generated, old.$ref, data],
+      const: data,
+      default: data,
+      examples: [data],
+      "x-strapi-conditions": data,
+      required: [generated],
+    };
+    const remote = { $ref: `https://example.test/schema.json${old.$ref}` };
+    const renamed = renameSchemas(
+      {
+        [generated]: { type: "object" },
+        Consumer: { ...payload, properties: { [generated]: old, remote } },
+      },
+      [{ name: "Model", schema: old }],
+    );
     expect(renamed).toStrictEqual({
-      Page: { $ref: "#/components/schemas/SharedSeoPublishedEntryInput" },
-      SharedSeoPublishedEntryInput: { type: "object" },
+      Model: { type: "object" },
+      Consumer: {
+        ...payload,
+        properties: { [generated]: ref("Model"), remote },
+      },
     });
   });
 
-  it("refuses two schemas with the same readable name", () => {
+  it("renames discriminator mapping targets without changing tag keys, examples or input schemas", () => {
+    const target = ref("t0").$ref;
+    const mapping = {
+      "media.image": target,
+      t0: "t0",
+      remote: `https://example.test/schema.json${target}`,
+      relative: `./schema.json${target}`,
+    };
+    const discriminator = { propertyName: "t0", mapping };
+    const raw = {
+      t0: {},
+      Blocks: {
+        items: { oneOf: [ref("t0")], discriminator },
+        examples: [{ discriminator }],
+      },
+    };
+    const renamed = renameSchemas(raw, [{ name: "Image", schema: ref("t0") }]);
+    const image = ref("Image");
+    expect(renamed["Blocks"]).toStrictEqual({
+      items: {
+        oneOf: [image],
+        discriminator: {
+          propertyName: "t0",
+          mapping: { ...mapping, "media.image": image.$ref, t0: image.$ref },
+        },
+      },
+      examples: [{ discriminator }],
+    });
+    expect(raw.Blocks.items.discriminator.mapping["media.image"]).toBe(target);
+    expect(raw.Blocks.items.discriminator.mapping.t0).toBe("t0");
+  });
+
+  it.each(["missing", "#/components/schemas/missing"])(
+    "rejects a missing discriminator mapping target %s during renaming and final validation",
+    (target) => {
+      const raw = {
+        Blocks: {
+          items: {
+            discriminator: {
+              propertyName: "__component",
+              mapping: { "media.image": target },
+            },
+          },
+        },
+      };
+      expect(() => renameSchemas(raw, [])).toThrow(/Unresolved.*missing/u);
+      expect(() => {
+        validateSchemaRefs(raw);
+      }).toThrow(/Unresolved.*missing/u);
+    },
+  );
+
+  it("groups only bare state references from the same model, retaining constraints and null", () => {
+    const pair = [ref("a"), ref("b")];
+    const restricted = [{ ...ref("a"), required: ["publishedAt"] }, ref("b")];
+    const renamed = renameSchemas(
+      {
+        a: { type: "object" },
+        b: { type: "object" },
+        Outer: {
+          properties: {
+            relation: { oneOf: pair, minProperties: 2 },
+            nullable: { oneOf: [...pair, { type: "null" }] },
+            restricted: { oneOf: restricted },
+          },
+        },
+        LookalikeDraftDocument: {},
+        LookalikePublishedDocument: {},
+        Unrelated: {
+          oneOf: [
+            ref("LookalikeDraftDocument"),
+            ref("LookalikePublishedDocument"),
+          ],
+        },
+      },
+      [
+        {
+          uid: "project.model",
+          name: "Public",
+          state: "published",
+          schema: ref("a"),
+        },
+        {
+          uid: "project.model",
+          name: "Preview",
+          state: "draft",
+          schema: ref("b"),
+        },
+        {
+          uid: "project.model",
+          name: "Entry",
+          state: "document",
+          schema: { oneOf: pair },
+        },
+      ],
+    );
+    expect(renamed["Entry"]).toStrictEqual({
+      anyOf: [ref("Public"), ref("Preview")],
+    });
+    expect(renamed["Outer"]).toStrictEqual({
+      properties: {
+        relation: { ...ref("Entry"), minProperties: 2 },
+        nullable: { oneOf: [ref("Entry"), { type: "null" }] },
+        restricted: {
+          oneOf: [
+            { ...ref("Public"), required: ["publishedAt"] },
+            ref("Preview"),
+          ],
+        },
+      },
+    });
+    expect(renamed["Unrelated"]).toStrictEqual({
+      oneOf: [ref("LookalikeDraftDocument"), ref("LookalikePublishedDocument")],
+    });
+  });
+
+  it("does not impose a constrained document root on other unions of its states", () => {
+    const pair = [ref("P"), ref("D")];
+    const renamed = renameSchemas(
+      {
+        P: {},
+        D: {},
+        Other: { oneOf: pair, minProperties: 1 },
+      },
+      [
+        { uid: "u", name: "P", state: "published", schema: ref("P") },
+        { uid: "u", name: "D", state: "draft", schema: ref("D") },
+        {
+          uid: "u",
+          name: "Entry",
+          state: "document",
+          schema: {
+            oneOf: pair,
+            required: ["special"],
+          },
+        },
+      ],
+    );
+    expect(renamed["Entry"]).toStrictEqual({
+      anyOf: pair,
+      required: ["special"],
+    });
+    expect(renamed["Other"]).toStrictEqual({ anyOf: pair, minProperties: 1 });
+  });
+
+  it("refuses ambiguous public names even when typia shares the target", () => {
     expect(() =>
-      renameSchemas({
-        "RestAnyDocumentshared_x2E_seo-x0000000000000001": {},
-        "RestAnyDocumentshared_x2E_seo-x0000000000000002": {},
-      }),
-    ).toThrow("renamed to the same name");
+      renameSchemas({ helper: {} }, [
+        { name: "Same", uid: "shared.seo", schema: ref("helper") },
+        { name: "Same", uid: "shared-seo", schema: ref("helper") },
+      ]),
+    ).toThrow(/Same.*shared\.seo.*shared-seo/u);
+    expect(() =>
+      renameSchemas({ Same: {}, helper: {} }, [
+        { name: "Same", schema: ref("helper") },
+      ]),
+    ).toThrow(/Ambiguous.*Same/u);
+  });
+
+  it("rejects missing local targets in roots and nested schemas before renaming", () => {
+    expect(() =>
+      renameSchemas({}, [{ name: "Missing", schema: ref("Missing") }]),
+    ).toThrow(/Unresolved.*Missing/u);
+    expect(() =>
+      renameSchemas(
+        {
+          Actual: false,
+          Consumer: { anyOf: [{ items: ref("Public") }] },
+        },
+        [{ name: "Public", schema: ref("Actual") }],
+      ),
+    ).toThrow(/Unresolved.*Public/u);
+  });
+
+  it.each([
+    "#/wrong/path",
+    "#missing",
+    "#/components/schemas/Model/properties/id",
+  ])("rejects unsupported local component pointer %s", ($ref) => {
+    expect(() => renameSchemas({ Model: { $ref } }, [])).toThrow(
+      "Expected a local schema component reference",
+    );
   });
 });
 

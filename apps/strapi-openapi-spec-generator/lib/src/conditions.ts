@@ -4,15 +4,14 @@ import path from "node:path";
 import type { ConditionContext } from "./condition-predicates.js";
 import type { ContentType } from "./content-types.js";
 import type { JsonSchema } from "./document.js";
+import type { SchemaRoot } from "./schema-identity.js";
 
 import { compilePredicate } from "./condition-predicates.js";
 import { listDirectories } from "./content-types.js";
 import { isUnknownArray, parseJsonObject, toRecord } from "./json.js";
-import { pascalCase } from "./names.js";
-import { CONDITION_MODES } from "./schema-names.js";
+import { schemaRefName } from "./schema-names.js";
 import { shapeOnly } from "./shape-only.js";
 
-type Mode = ConditionContext["mode"];
 type Model = Pick<ContentType, "attributes" | "uid">;
 interface ModelContext extends ConditionContext {
   uid: string;
@@ -70,11 +69,6 @@ const relaxed = (
     anyOf: [original, shapeOnly(original, context.schemas), { type: "null" }],
   };
 };
-
-const variant = (name: string, prefix: string): Mode | undefined =>
-  name.startsWith(prefix)
-    ? CONDITION_MODES.get(name.slice(prefix.length))
-    : undefined;
 
 const conditionalBranch = (
   schema: JsonSchema,
@@ -141,9 +135,10 @@ function applyModel(schema: JsonSchema, context: ModelContext): void {
   }
   context.visited.add(schema);
   const { $ref: reference, required } = schema;
-  const prefix = "#/components/schemas/";
-  if (typeof reference === "string" && reference.startsWith(prefix)) {
-    const target = context.schemas[reference.slice(prefix.length)];
+  const targetName =
+    typeof reference === "string" ? schemaRefName(reference) : undefined;
+  if (targetName !== undefined) {
+    const target = context.schemas[targetName];
     if (target !== undefined) {
       applyModel(target, context);
     }
@@ -159,24 +154,9 @@ function applyModel(schema: JsonSchema, context: ModelContext): void {
   applyProperties(schema, nestedContext);
 }
 
-// Typia encodes multi-argument EntryInput helpers as a UID and two boolean flags.
-const entryHelper = (name: string): { uid: string; mode: Mode } | undefined => {
-  const decoded = name
-    .replace(/-x[0-9A-F]{16}$/u, "")
-    .replaceAll(/_x(?<code>[0-9A-F]{2})_/gu, (_match, code: string) =>
-      String.fromCodePoint(Number.parseInt(code, 16)),
-    );
-  const flags =
-    /^EntryInput(?<uid>.*)(?:true|false)(?<update>true|false)$/su.exec(
-      decoded,
-    )?.groups;
-  const uid = flags?.["uid"];
-  return uid === undefined
-    ? undefined
-    : { uid, mode: flags?.["update"] === "true" ? "update" : "create" };
-};
-
-const componentModels = async (root: string): Promise<Model[]> => {
+/** Read component UIDs and source attributes for compiler roots and conditional validation. */
+const readComponents = async (projectDirectory: string): Promise<Model[]> => {
+  const root = path.join(projectDirectory, "src", "components");
   const categories = await listDirectories(root);
   const groups = await Promise.all(
     categories.map(async (category) => {
@@ -193,6 +173,43 @@ const componentModels = async (root: string): Promise<Model[]> => {
             };
           }),
       );
+    }),
+  );
+  return groups.flat();
+};
+
+/**
+ * Read plugin content types that the project overrides, such as an edited users-permissions user.
+ * The Content-Type Builder writes the complete schema, conditions included, under src/extensions.
+ */
+const readExtensions = async (projectDirectory: string): Promise<Model[]> => {
+  const root = path.join(projectDirectory, "src", "extensions");
+  const plugins = await listDirectories(root);
+  const groups = await Promise.all(
+    plugins.map(async (plugin) => {
+      const directory = path.join(root, plugin, "content-types");
+      const names = await listDirectories(directory);
+      const models = await Promise.all(
+        names.map(async (name) => {
+          const file = path.join(directory, name, "schema.json");
+          try {
+            const source = await readFile(file, "utf8");
+            return [
+              {
+                uid: `plugin::${plugin}.${name}`,
+                attributes: toRecord(parseJsonObject(source)["attributes"]),
+              },
+            ];
+          } catch (error) {
+            // A content-types folder can hold only lifecycles or other overrides.
+            if (toRecord(error)["code"] === "ENOENT") {
+              return [];
+            }
+            throw error;
+          }
+        }),
+      );
+      return models.flat();
     }),
   );
   return groups.flat();
@@ -218,26 +235,17 @@ function* conditionalModels(
 }
 
 /** Apply source visibility rules to model schemas in place and return warnings in model order. */
-const applyConditions = async (
-  projectDirectory: string,
-  contentTypes: ContentType[],
+const applyConditions = (
+  models: Model[],
+  roots: SchemaRoot[],
   schemas: Record<string, JsonSchema>,
-): Promise<string[]> => {
-  const root = path.join(projectDirectory, "src", "components");
-  const models = [...contentTypes, ...(await componentModels(root))];
-  // shapeOnly adds Unvalidated aliases, which are not model entry points.
-  const entries = Object.entries(schemas).map(([name, schema]) => ({
-    name,
-    schema,
-    helper: entryHelper(name),
-  }));
+): string[] => {
   const warnings = new Set<string>();
   for (const { uid, attributes, fields } of conditionalModels(models)) {
-    const prefix = pascalCase(uid);
     const visited = new WeakSet<JsonSchema>();
-    for (const { name, schema, helper } of entries) {
-      const mode = helper?.uid === uid ? helper.mode : variant(name, prefix);
-      if (mode !== undefined) {
+    for (const { name, uid: owner, mode } of roots) {
+      const schema = schemas[name];
+      if (owner === uid && mode !== undefined && schema !== undefined) {
         applyModel(schema, {
           attributes,
           mode,
@@ -253,4 +261,4 @@ const applyConditions = async (
   return [...warnings];
 };
 
-export { applyConditions };
+export { applyConditions, readComponents, readExtensions };

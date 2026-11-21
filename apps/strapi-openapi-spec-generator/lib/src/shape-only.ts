@@ -1,8 +1,8 @@
 import type { JsonSchema } from "./document.js";
 
 import { isUnknownArray, toRecord } from "./json.js";
+import { schemaRef, schemaRefName } from "./schema-names.js";
 
-const SCHEMAS = "#/components/schemas/";
 const isIdentity = (key: unknown): boolean =>
   key === "id" || key === "documentId" || key === "__component";
 
@@ -13,8 +13,9 @@ function shapeOnly(
 ): JsonSchema {
   const schema = toRecord(value);
   const { $ref: reference } = schema;
-  if (typeof reference === "string" && reference.startsWith(SCHEMAS)) {
-    const name = reference.slice(SCHEMAS.length);
+  const name =
+    typeof reference === "string" ? schemaRefName(reference) : undefined;
+  if (name !== undefined) {
     const source = schemas[name];
     if (source === undefined) {
       return { $ref: reference };
@@ -25,7 +26,7 @@ function shapeOnly(
       schemas[alias] = {};
       schemas[alias] = shapeOnly(source, schemas);
     }
-    return { $ref: `${SCHEMAS}${alias}` };
+    return { $ref: schemaRef(alias) };
   }
   return inlineShape(schema, schemas);
 }

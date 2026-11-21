@@ -217,6 +217,42 @@ type RelatedDocument<T extends UID.ContentType, Published extends boolean> =
       : RestDraftDocument<T>
     : RestPublishedDocument<T>;
 
+/** Follow only attributes that can actually be populated in a response, including cycles. */
+type TargetOf<A> = A extends Hidden
+  ? never
+  : A extends { type: "relation"; target: infer T extends UID.ContentType }
+    ? T
+    : A extends { type: "media" }
+      ? "plugin::upload.file"
+      : A extends {
+            type: "component";
+            component: infer C extends UID.Component;
+          }
+        ? C
+        : A extends {
+              type: "dynamiczone";
+              components: readonly (infer C extends UID.Component)[];
+            }
+          ? C
+          : never;
+
+type Targets<U extends UID.Schema> = U extends UID.Schema
+  ? TargetOf<Attrs<U>[keyof Attrs<U>]>
+  : never;
+
+export type ReachableModels<
+  U extends UID.Schema,
+  Seen extends UID.Schema = never,
+> = [U] extends [never]
+  ? Seen
+  : ReachableModels<Exclude<Targets<U>, Seen | U>, Seen | U>;
+
+export type DraftModels<U extends UID.ContentType> = U extends UID.ContentType
+  ? HasDrafts<U> extends true
+    ? U
+    : never
+  : never;
+
 type PopulatedValue<A, Published extends boolean> = A extends {
   type: "relation";
   relation: infer R;
@@ -268,8 +304,7 @@ type PopulatedValue<A, Published extends boolean> = A extends {
 /**
  * A published entry. All selected required scalar and component values are non-null.
  * Relations and media can still be absent after population and output sanitization.
- *
- * Keep these objects as plain intersections: typia uses their alias as the schema name.
+ * Components use the validation state of their owner.
  */
 export type RestPublishedDocument<U extends UID.Schema> = Ids<U> & {
   [K in ScalarKey<U>]?: K extends
@@ -302,10 +337,11 @@ export type RestDraftDocument<U extends UID.Schema> = Ids<U> & {
  * Otherwise either state is valid. `publishedAt` is optional because fields can omit it,
  * so the two branches may overlap and their JSON Schema union must not be exclusive.
  */
-export type RestAnyDocument<U extends UID.Schema> =
-  Schema.Schema<U> extends { options: { draftAndPublish: false } }
-    ? RestPublishedDocument<U>
-    : RestPublishedDocument<U> | RestDraftDocument<U>;
+export type RestAnyDocument<U extends UID.Schema> = U extends UID.ContentType
+  ? HasDrafts<U> extends true
+    ? RestPublishedDocument<U> | RestDraftDocument<U>
+    : RestPublishedDocument<U>
+  : RestPublishedDocument<U> | RestDraftDocument<U>;
 
 /** A dynamic zone entry, with the component discriminator retained in both states. */
 export type RestPublishedZoneEntry<C extends UID.Component> =
@@ -388,7 +424,7 @@ type InputValue<
           ? StructuredInput<A, Published, Updating>
           : ScalarValue<A, Published>;
 
-type EntryInput<
+export type EntryInput<
   C extends UID.Component,
   Published extends boolean,
   Updating extends boolean,
@@ -400,7 +436,7 @@ type EntryInput<
     ? PublishedCreateComponentInput<C>
     : DraftCreateComponentInput<C>;
 
-type ZoneInput<
+export type ZoneInput<
   C extends UID.Component,
   Published extends boolean,
   Updating extends boolean,
